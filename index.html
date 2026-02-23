@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="theme-color" content="#020510" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/assets/company_icons/icon-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/assets/company_icons/icon-180.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>Arch Build</title>
+    <style>
+      :root{
+        --fab-icon-w: 44px;
+        --fab-gap: 12px;
+        --fab-label-w: 180px;
+      }
+      .fab-menu{
+        left:auto !important;
+        right:18px !important;
+        transform:none !important;
+        align-items:flex-end !important;
+        width:calc(var(--fab-label-w, 180px) + var(--fab-gap, 12px) + var(--fab-icon-w, 44px));
+        padding-right:calc(var(--fab-label-w, 180px) + var(--fab-gap, 12px));
+        max-width:calc(100vw - 24px);
+      }
+      .fab-mini{
+        grid-template-columns:var(--fab-label-w, 180px) var(--fab-icon-w, 44px);
+        gap:var(--fab-gap, 12px);
+        width:calc(var(--fab-label-w, 180px) + var(--fab-gap, 12px) + var(--fab-icon-w, 44px));
+      }
+      .fab-chip{
+        max-width:var(--fab-label-w, 180px);
+        white-space:nowrap;
+        overflow:hidden;
+        text-overflow:ellipsis;
+      }
+      body[data-theme="light"] .prj-amount,
+      body[data-theme="light"] .pricePill{
+        color:var(--text);
+      }
+    </style>
+  </head>
+  <body data-theme="light">
+    <script>
+      (() => {
+        try {
+          const stored = localStorage.getItem('ab_theme');
+          const theme = stored === 'dark' || stored === 'light' ? stored : 'light';
+          document.body.dataset.theme = theme;
+        } catch (e) {
+          document.body.dataset.theme = 'light';
+        }
+      })();
+    </script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
