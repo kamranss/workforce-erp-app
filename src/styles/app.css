@@ -8013,3 +8013,30 @@ body[data-theme="dark"] #financePage .finance-overview-scope-tabs .fin-tab.activ
     max-width:420px;
   }
 }
+
+/* Report > Earnings list: keep desktop rows stable with long labels/amounts */
+#financePage .fin-report-earnings-item{
+  align-items:flex-start;
+}
+#financePage .fin-report-earnings-item .fin-tx-main{
+  min-width:220px;
+}
+#financePage .fin-report-earnings-item .fin-earnings-amounts{
+  min-width:0;
+  justify-content:flex-start;
+}
+#financePage .fin-report-earnings-item .fin-earning-amount{
+  white-space:normal;
+  overflow-wrap:anywhere;
+}
+@media (min-width:961px){
+  #financePage .fin-report-earnings-item{
+    display:grid;
+    grid-template-columns:minmax(240px, 1fr) minmax(360px, 1.3fr) auto;
+    gap:12px;
+    align-items:start;
+  }
+  #financePage .fin-report-earnings-item > .ghost{
+    justify-self:end;
+  }
+}

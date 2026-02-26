@@ -1941,9 +1941,9 @@ export default function Finance() {
                 </div>
               ))}
 
-              <div className="fin-tx-list" style={{ marginTop: 12 }}>
+              <div className="fin-tx-list fin-report-earnings-list" style={{ marginTop: 12 }}>
                 {(customerPaymentsTotals?.projects || []).map((project) => (
-                  <div key={project.projectId || `${project.projectDescription}-${project.customerName}`} className="fin-tx-item">
+                  <div key={project.projectId || `${project.projectDescription}-${project.customerName}`} className="fin-tx-item fin-report-earnings-item">
                     <div className="fin-tx-main">
                       <span className="fin-tx-label">{project.projectDescription || project.projectId || '-'}</span>
                       <div className="fin-earning-meta">
