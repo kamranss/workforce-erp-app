@@ -27,3 +27,7 @@ export function projectsFinanceOverview(query) {
 export function userLiability(query) {
   return request('/api/reports/user-liability', { query });
 }
+
+export function customerPaymentsOverview(query) {
+  return request('/api/reports/customer-payments-overview', { query });
+}

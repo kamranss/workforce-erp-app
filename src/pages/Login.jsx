@@ -40,20 +40,6 @@ export default function Login() {
           {loginBusy ? <FiLoader className="login-spinner" aria-hidden="true" /> : 'Go'}
         </button>
       </div>
-      <button
-        type="button"
-        className="btn"
-        style={{ marginTop: 10 }}
-        onClick={() => {
-          const quickCode = '123456';
-          setPassCode(quickCode);
-          loginLog('quick-login-click', { digits: quickCode.length, loginBusy });
-          loginWithCode(quickCode);
-        }}
-        disabled={loginBusy}
-      >
-        Quick Login
-      </button>
       {loginStatus ? <div className="muted" style={{ marginTop: 8 }}>{loginStatus}</div> : null}
       {loginError ? <div className="muted" style={{ marginTop: 8 }}>{loginError}</div> : null}
     </div>

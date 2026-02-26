@@ -1,9 +1,6 @@
 import { useEffect, useState } from 'react';
 import { FiClock, FiLoader, FiMapPin, FiPlayCircle } from 'react-icons/fi';
-import { listOngoingProjects } from '../api/projectsApi.js';
 import { checkIn, checkOut, myOpenEntry } from '../api/timeEntriesApi.js';
-import { myEarnings } from '../api/reportsApi.js';
-import SimpleModal from '../components/SimpleModal.jsx';
 import { useAuth } from '../context/AuthProvider.jsx';
 import { useUI } from '../context/UIProvider.jsx';
 
@@ -70,16 +67,10 @@ async function getGeo(preferPrecise) {
 export default function Clock() {
   const { activeTab, showToast, refreshTick, showGlobalLoader, requestRefresh } = useUI();
   const { role } = useAuth();
-  const [projects, setProjects] = useState([]);
-  const [projectIdIn, setProjectIdIn] = useState('');
-  const [projectIdOut, setProjectIdOut] = useState('');
-  const [checkInNeedsManualProject, setCheckInNeedsManualProject] = useState(false);
   const [openEntry, setOpenEntry] = useState(null);
   const [busy, setBusy] = useState(false);
   const [busyAction, setBusyAction] = useState('');
   const [msg, setMsg] = useState('');
-  const [balance, setBalance] = useState(null);
-  const [manualProjectModalOpen, setManualProjectModalOpen] = useState(false);
   const [preferPreciseLocation] = useState(readGeoPreference);
   const [geoPermissionState, setGeoPermissionState] = useState('prompt');
   const [loadingData, setLoadingData] = useState(false);
@@ -89,32 +80,22 @@ export default function Clock() {
   const roleLower = String(role || '').toLowerCase();
   const isUser = roleLower === 'user' || roleLower === 'employee';
 
-  const eligibleStatus = new Set(['waiting', 'ongoing', 'finished']);
-  const loadOngoingProjects = async () => {
-    const ongoing = await listOngoingProjects({ limit: 20 });
-    const items = (ongoing?.items || []).filter((project) => {
-      const status = String(project?.status || '').toLowerCase();
-      return eligibleStatus.has(status);
-    });
-    setProjects(items);
-    setProjectIdOut((prev) => prev || items[0]?.id || '');
-    return items;
+  const resolveOpenEntry = (open) => {
+    if (!open) return null;
+    if (open?.entry && typeof open.entry === 'object') return open.entry;
+    if (open?.data?.entry && typeof open.data.entry === 'object') return open.data.entry;
+    if (open?.data && typeof open.data === 'object' && (open.data.clockInAt || open.data.id)) return open.data;
+    if (typeof open === 'object' && (open.clockInAt || open.id)) return open;
+    return null;
   };
 
   const loadData = async ({ silent = false } = {}) => {
     if (!silent) setLoadingData(true);
     try {
-      const [items, open, earnings] = await Promise.all([
-        loadOngoingProjects(),
-        myOpenEntry(),
-        myEarnings({ year: String(new Date().getFullYear()) })
-      ]);
-
-      if (checkInNeedsManualProject && !projectIdIn) {
-        setProjectIdIn(items[0]?.id || '');
-      }
-      setOpenEntry(open?.entry || null);
-      setBalance(earnings?.pendingTotal ?? null);
+      const open = await myOpenEntry();
+      const nextOpenEntry = resolveOpenEntry(open);
+      setOpenEntry(nextOpenEntry);
+      setMsg('');
       setHasLoaded(true);
     } finally {
       if (!silent) setLoadingData(false);
@@ -137,32 +118,22 @@ export default function Clock() {
     loadData().catch((err) => setMsg(err?.message || 'Failed to refresh clock data.'));
   }, [refreshTick]);
 
-  const onCheckIn = async (projectIdOverride = '', forceAuto = false) => {
+  const onCheckIn = async () => {
     setBusy(true);
     setBusyAction('check-in');
     setMsg('Checking in...');
 
     try {
       const geo = await getGeo(preferPreciseLocation);
-      const payload = {
-        geoIn: geo
-      };
-      const projectIdToUse = String(projectIdOverride || projectIdIn || '').trim();
-      if (checkInNeedsManualProject && !forceAuto) {
-        if (!projectIdToUse) {
-          setMsg('Select a project to continue check-in.');
-          return false;
-        }
-        payload.projectIdIn = projectIdToUse;
-      }
-
-      await checkIn(payload);
+      await checkIn({ geoIn: geo });
       setMsg('Check-in successful.');
       showToast('Check-in successful.', 'success');
-      setCheckInNeedsManualProject(false);
-      setProjectIdIn('');
-      setManualProjectModalOpen(false);
-      await loadData({ silent: true });
+      try {
+        await loadData({ silent: true });
+      } catch (refreshErr) {
+        setMsg('Check-in successful. Refreshing latest shift data failed, please reopen Clock tab.');
+        showToast(refreshErr?.message || 'Could not refresh clock status after check-in.', 'warning');
+      }
       requestRefresh();
       return true;
     } catch (err) {
@@ -170,13 +141,7 @@ export default function Clock() {
       const errMsg = String(err?.message || '');
       const noMatch = errCode === 'NO_MATCHING_PROJECT' || errMsg.toUpperCase().includes('NO_MATCHING_PROJECT');
       if (noMatch) {
-        const latest = await loadOngoingProjects().catch(() => []);
-        if (!projectIdIn) {
-          setProjectIdIn(latest?.[0]?.id || '');
-        }
-        setCheckInNeedsManualProject(true);
-        setManualProjectModalOpen(true);
-        const special = 'No nearby ongoing project found. Please select project manually.';
+        const special = 'No nearby ongoing project found.';
         setMsg(special);
         showToast(special, 'warning');
         return false;
@@ -191,26 +156,24 @@ export default function Clock() {
   };
 
   const onCheckOut = async () => {
-    const projectOutId = String(openEntry?.projectIdIn || projectIdOut || projects[0]?.id || '').trim();
-    if (!projectOutId) {
-      setMsg('No available project for check-out.');
-      showToast('No available project for check-out.');
-      return false;
-    }
-
     setBusy(true);
     setBusyAction('check-out');
     setMsg('Checking out...');
 
     try {
       const geo = await getGeo(preferPreciseLocation);
-      await checkOut({
-        projectIdOut: projectOutId,
-        geoOut: geo
-      });
+      const payload = { geoOut: geo };
+      const projectOutId = String(openEntry?.projectIdIn || '').trim();
+      if (projectOutId) payload.projectIdOut = projectOutId;
+      await checkOut(payload);
       setMsg('Check-out successful.');
       showToast('Check-out successful.', 'success');
-      await loadData({ silent: true });
+      try {
+        await loadData({ silent: true });
+      } catch (refreshErr) {
+        setMsg('Check-out successful. Refreshing latest shift data failed, please reopen Clock tab.');
+        showToast(refreshErr?.message || 'Could not refresh clock status after check-out.', 'warning');
+      }
       requestRefresh();
       return true;
     } catch (err) {
@@ -237,10 +200,6 @@ export default function Clock() {
           <div className="clock-msg">
             {openEntry ? `Open since ${new Date(openEntry.clockInAt).toLocaleString()}` : 'No open entry'}
           </div>
-          <div className="clock-id">
-            <label>Pending Balance</label>
-            <div>{balance == null ? '-' : `$${Number(balance).toFixed(2)}`}</div>
-          </div>
         </div>
       </div>
 
@@ -253,12 +212,7 @@ export default function Clock() {
           <FiMapPin />
         </div>
         <div className="page-actions">
-          <button className="ghost btn-tone-success" type="button" onClick={() => {
-            setCheckInNeedsManualProject(false);
-            setProjectIdIn('');
-            setManualProjectModalOpen(false);
-            onCheckIn('', true);
-          }} disabled={busy || !!openEntry}>
+          <button className="ghost btn-tone-success" type="button" onClick={onCheckIn} disabled={busy || !!openEntry}>
             <FiPlayCircle />
             Check In
           </button>
@@ -288,34 +242,6 @@ export default function Clock() {
           <div style={{ fontWeight: 600 }}>Loading clock data...</div>
         </div>
       ) : null}
-
-      <SimpleModal open={manualProjectModalOpen} onClose={() => setManualProjectModalOpen(false)} title="Manual Project Selection" size="sm">
-        <div className="modal-form-grid">
-          {checkInNeedsManualProject ? (
-            <>
-            <div className="full muted">Available Projects</div>
-            <select className="full" value={projectIdIn} onChange={(event) => setProjectIdIn(event.target.value)} disabled={busy || !!openEntry}>
-              <option value="">Select check-in project</option>
-              {projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.description} ({project.status || 'active'})
-                </option>
-              ))}
-            </select>
-            </>
-          ) : null}
-          <div className="full row" style={{ justifyContent: 'flex-end' }}>
-            <button type="button" className="ghost btn-tone-neutral" onClick={() => setManualProjectModalOpen(false)}>Cancel</button>
-            <button type="button" onClick={async () => {
-              const ok = await onCheckIn(projectIdIn);
-              if (ok) setManualProjectModalOpen(false);
-            }} disabled={busy || !!openEntry} className="btn-tone-primary btn-with-spinner">
-              {busy ? <FiLoader className="btn-spinner" /> : null}
-              <span>{busy ? 'Submitting...' : 'Confirm Check In'}</span>
-            </button>
-          </div>
-        </div>
-      </SimpleModal>
     </div>
   );
 }

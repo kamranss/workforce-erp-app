@@ -50,6 +50,7 @@ function getDefaultTtlMs(pathname) {
   if (pathname.startsWith('/api/reports/me')) return 15000;
   if (pathname.startsWith('/api/reports/')) return 45000;
   if (pathname.startsWith('/api/payments')) return 45000;
+  if (pathname.startsWith('/api/customer-payments')) return 45000;
   if (pathname.startsWith('/api/bonus-and-penalties')) return 45000;
   if (pathname.startsWith('/api/expenses')) return 45000;
   if (pathname.startsWith('/api/users')) return 45000;
@@ -64,6 +65,7 @@ function getReadTags(pathname) {
   if (pathname.startsWith('/api/projects')) return ['projects', 'reports', 'dashboard'];
   if (pathname.startsWith('/api/reports/')) return ['reports', 'dashboard', 'finance', 'hours'];
   if (pathname.startsWith('/api/payments')) return ['payments', 'finance', 'reports'];
+  if (pathname.startsWith('/api/customer-payments')) return ['customer-payments', 'finance', 'reports'];
   if (pathname.startsWith('/api/bonus-and-penalties')) return ['bonuses', 'finance', 'reports'];
   if (pathname.startsWith('/api/expenses')) return ['expenses', 'finance', 'reports'];
   if (pathname.startsWith('/api/users')) return ['users', 'reports', 'finance'];
@@ -75,6 +77,7 @@ function getMutationInvalidationTags(pathname) {
   if (pathname.startsWith('/api/projects')) return ['projects', 'reports', 'dashboard', 'finance'];
   if (pathname.startsWith('/api/time-entries')) return ['hours', 'dashboard', 'reports', 'time-entries'];
   if (pathname.startsWith('/api/payments')) return ['payments', 'finance', 'reports'];
+  if (pathname.startsWith('/api/customer-payments')) return ['customer-payments', 'finance', 'reports'];
   if (pathname.startsWith('/api/bonus-and-penalties')) return ['bonuses', 'finance', 'reports'];
   if (pathname.startsWith('/api/expenses')) return ['expenses', 'finance', 'reports'];
   if (pathname.startsWith('/api/users')) return ['users', 'reports', 'finance', 'dashboard'];

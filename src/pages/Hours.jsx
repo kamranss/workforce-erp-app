@@ -166,16 +166,7 @@ function entryHours(row) {
 }
 
 function isEditedEntry(entry) {
-  const createdAtMs = new Date(entry?.createdAt || '').getTime();
-  const updatedAtMs = new Date(entry?.updatedAt || '').getTime();
-  if (!Number.isFinite(createdAtMs) || !Number.isFinite(updatedAtMs)) return false;
-  return (updatedAtMs - createdAtMs) > 2000;
-}
-
-function formatUpdatedAt(value) {
-  const dt = new Date(value || '');
-  if (Number.isNaN(dt.getTime())) return '-';
-  return dt.toLocaleString();
+  return entry?.edited === true;
 }
 
 function resolveSummary(payload, items = []) {
@@ -235,6 +226,10 @@ export default function Hours() {
   const [projectOptions, setProjectOptions] = useState([]);
   const [manualModalOpen, setManualModalOpen] = useState(false);
   const [manualSaving, setManualSaving] = useState(false);
+  const [manualUserPickerOpen, setManualUserPickerOpen] = useState(false);
+  const [manualProjectPickerOpen, setManualProjectPickerOpen] = useState(false);
+  const [manualUserSearch, setManualUserSearch] = useState('');
+  const [manualProjectSearch, setManualProjectSearch] = useState('');
   const [manualForm, setManualForm] = useState({
     userId: '',
     projectId: '',
@@ -285,6 +280,26 @@ export default function Hours() {
         items: dayItems
       }));
   }, [items]);
+  const selectedManualUser = userOptions.find((user) => String(user?.id || '') === String(manualForm.userId || ''));
+  const selectedManualProject = projectOptions.find((project) => String(project?.id || '') === String(manualForm.projectId || ''));
+  const manualUserSearchText = String(manualUserSearch || '').trim().toLowerCase();
+  const manualProjectSearchText = String(manualProjectSearch || '').trim().toLowerCase();
+  const manualFilteredUsers = userOptions.filter((user) => {
+    if (!manualUserSearchText) return true;
+    const text = `${user?.name || ''} ${user?.surname || ''} ${user?.email || ''}`.toLowerCase();
+    return text.includes(manualUserSearchText);
+  });
+  const manualFilteredProjects = projectOptions.filter((project) => {
+    if (!manualProjectSearchText) return true;
+    const text = `${project?.description || ''} ${project?.address?.raw || ''} ${project?.id || ''}`.toLowerCase();
+    return text.includes(manualProjectSearchText);
+  });
+  const selectedManualUserLabel = selectedManualUser
+    ? `${selectedManualUser.name || ''} ${selectedManualUser.surname || ''}`.trim() || selectedManualUser.email || selectedManualUser.id
+    : '';
+  const selectedManualProjectLabel = selectedManualProject
+    ? (selectedManualProject.description || selectedManualProject.address?.raw || selectedManualProject.id || '')
+    : '';
 
   const loadUsers = async () => {
     if (!isAdmin || !getStoredToken()) return;
@@ -426,6 +441,10 @@ export default function Hours() {
       clockOutAt: '',
       notes: ''
     });
+    setManualUserPickerOpen(false);
+    setManualProjectPickerOpen(false);
+    setManualUserSearch('');
+    setManualProjectSearch('');
     setManualModalOpen(true);
   };
 
@@ -626,7 +645,7 @@ export default function Hours() {
                   const userLabel = resolveUserLabel(entry) || '-';
                   const projectLabel = resolveProjectLabel(entry);
                   const edited = isEditedEntry(entry);
-                  const editedTooltip = `Updated: ${formatUpdatedAt(entry?.updatedAt)}`;
+                  const editedTooltip = 'Edited';
                   return (
                     <div key={entry.id} className={`hours-card time-card hours-card-compact${edited ? ' is-edited' : ''}`}>
                     <div className="hours-card-head">
@@ -712,24 +731,94 @@ export default function Hours() {
         open={manualModalOpen}
         onClose={() => {
           if (manualSaving) return;
+          setManualUserPickerOpen(false);
+          setManualProjectPickerOpen(false);
+          setManualUserSearch('');
+          setManualProjectSearch('');
           setManualModalOpen(false);
         }}
         title="Add Hours"
         size="md"
       >
         <div className="modal-form-grid">
-          <select className="full" value={manualForm.userId} onChange={(e) => setManualForm((prev) => ({ ...prev, userId: e.target.value }))}>
-            <option value="">Select user</option>
-            {userOptions.map((user) => (
-              <option key={user.id} value={user.id}>{user.name} {user.surname} ({user.email})</option>
-            ))}
-          </select>
-          <select className="full" value={manualForm.projectId} onChange={(e) => setManualForm((prev) => ({ ...prev, projectId: e.target.value }))}>
-            <option value="">Select project</option>
-            {projectOptions.map((project) => (
-              <option key={project.id} value={project.id}>{project.description || project.address?.raw || project.id}</option>
-            ))}
-          </select>
+          <input
+            className="full"
+            placeholder="Search user"
+            value={manualUserPickerOpen ? manualUserSearch : selectedManualUserLabel}
+            onFocus={() => {
+              setManualProjectPickerOpen(false);
+              setManualUserPickerOpen(true);
+              if (!manualUserPickerOpen) setManualUserSearch('');
+            }}
+            onClick={() => {
+              setManualProjectPickerOpen(false);
+              setManualUserPickerOpen((prev) => !prev);
+              if (!manualUserPickerOpen) setManualUserSearch('');
+            }}
+            onChange={(e) => {
+              setManualProjectPickerOpen(false);
+              setManualUserPickerOpen(true);
+              setManualUserSearch(e.target.value);
+            }}
+          />
+          {manualUserPickerOpen ? (
+            <div className="full fin-expense-project-picker" style={{ maxHeight: 180 }}>
+              {manualFilteredUsers.map((user) => (
+                <button
+                  key={user.id}
+                  type="button"
+                  className={`fin-expense-project-item${String(manualForm.userId || '') === String(user.id) ? ' active' : ''}`}
+                  onClick={() => {
+                    setManualForm((prev) => ({ ...prev, userId: String(user.id) }));
+                    setManualUserPickerOpen(false);
+                  }}
+                >
+                  <span className="fin-expense-status none">USER</span>
+                  <span className="fin-expense-project-label">{`${user.name || ''} ${user.surname || ''}`.trim() || user.email || user.id}</span>
+                </button>
+              ))}
+              {!manualFilteredUsers.length ? <div className="muted fin-expense-project-empty">No users found.</div> : null}
+            </div>
+          ) : null}
+          <input
+            className="full"
+            placeholder="Search project"
+            value={manualProjectPickerOpen ? manualProjectSearch : selectedManualProjectLabel}
+            onFocus={() => {
+              setManualUserPickerOpen(false);
+              setManualProjectPickerOpen(true);
+              if (!manualProjectPickerOpen) setManualProjectSearch('');
+            }}
+            onClick={() => {
+              setManualUserPickerOpen(false);
+              setManualProjectPickerOpen((prev) => !prev);
+              if (!manualProjectPickerOpen) setManualProjectSearch('');
+            }}
+            onChange={(e) => {
+              setManualUserPickerOpen(false);
+              setManualProjectPickerOpen(true);
+              setManualProjectSearch(e.target.value);
+            }}
+          />
+          {manualProjectPickerOpen ? (
+            <div className="full fin-expense-project-picker" style={{ maxHeight: 180 }}>
+              {manualFilteredProjects.map((project) => (
+                <button
+                  key={project.id}
+                  type="button"
+                  className={`fin-expense-project-item${String(manualForm.projectId || '') === String(project.id) ? ' active' : ''}`}
+                  onClick={() => {
+                    setManualForm((prev) => ({ ...prev, projectId: String(project.id) }));
+                    setManualProjectPickerOpen(false);
+                  }}
+                >
+                  <span className="fin-expense-status none">PRJ</span>
+                  <span className="fin-expense-project-label">{project.description || project.address?.raw || project.id}</span>
+                </button>
+              ))}
+              {!manualFilteredProjects.length ? <div className="muted fin-expense-project-empty">No projects found.</div> : null}
+            </div>
+          ) : null}
           <input className="full" type="datetime-local" placeholder="Clock in date & time" value={manualForm.clockInAt} onChange={(e) => setManualForm((prev) => ({ ...prev, clockInAt: e.target.value }))} />
           <input className="full" type="datetime-local" placeholder="Clock out date & time" value={manualForm.clockOutAt} onChange={(e) => setManualForm((prev) => ({ ...prev, clockOutAt: e.target.value }))} />
           <input className="full" placeholder="Notes (optional)" value={manualForm.notes} onChange={(e) => setManualForm((prev) => ({ ...prev, notes: e.target.value }))} />

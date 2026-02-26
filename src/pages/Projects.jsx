@@ -1,7 +1,7 @@
 
 import { useEffect, useRef, useState } from 'react';
-import { FiEdit2, FiLoader, FiNavigation, FiPhone, FiPlusCircle } from 'react-icons/fi';
-import { createCustomer, listCustomers, updateCustomer } from '../api/customersApi.js';
+import { FiEdit2, FiLoader, FiMessageCircle, FiNavigation, FiPhone, FiPlusCircle } from 'react-icons/fi';
+import { createCustomer, listCustomers, searchCustomersForProjectPicker, updateCustomer } from '../api/customersApi.js';
 import { createProject, deleteProject, listProjects, projectStatusCounts, updateProject } from '../api/projectsApi.js';
 import SimpleModal from '../components/SimpleModal.jsx';
 import { useAuth } from '../context/AuthProvider.jsx';
@@ -75,6 +75,13 @@ export default function Projects() {
 
   const [projectForm, setProjectForm] = useState(EMPTY_PROJECT_FORM);
   const [projectFormError, setProjectFormError] = useState('');
+  const [projectCustomerSearch, setProjectCustomerSearch] = useState('');
+  const [projectCustomerPickerOpen, setProjectCustomerPickerOpen] = useState(false);
+  const [projectCustomerOptions, setProjectCustomerOptions] = useState([]);
+  const [projectCustomerCursor, setProjectCustomerCursor] = useState(null);
+  const [projectCustomerHasMore, setProjectCustomerHasMore] = useState(false);
+  const [projectCustomerLoading, setProjectCustomerLoading] = useState(false);
+  const [projectCustomerLoadMoreBusy, setProjectCustomerLoadMoreBusy] = useState(false);
   const [editProjectId, setEditProjectId] = useState('');
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [projectSaving, setProjectSaving] = useState(false);
@@ -105,6 +112,7 @@ export default function Projects() {
   const projectsRequestLockRef = useRef(false);
   const countsRequestLockRef = useRef(false);
   const customersRequestLockRef = useRef(false);
+  const skipNextProjectCustomerSearchRef = useRef(false);
 
   const isActive = activeTab === 'projects';
   const roleLower = String(role || '').toLowerCase();
@@ -260,6 +268,47 @@ export default function Projects() {
     }
   };
 
+  const loadProjectCustomerOptions = async ({ reset = false, queryOverride } = {}) => {
+    if (!projectModalOpen) return [];
+    if (reset) {
+      setProjectCustomerLoading(true);
+    } else {
+      if (!projectCustomerHasMore || !projectCustomerCursor || projectCustomerLoadMoreBusy) return [];
+      setProjectCustomerLoadMoreBusy(true);
+    }
+    try {
+      const q = String((queryOverride ?? projectCustomerSearch) || '').trim();
+      const data = await searchCustomersForProjectPicker({
+        limit: 6,
+        cursor: reset ? undefined : projectCustomerCursor,
+        q: q || undefined
+      });
+      const nextItems = Array.isArray(data?.items) ? data.items : [];
+      const nextCursor = data?.nextCursor || null;
+      setProjectCustomerCursor(nextCursor);
+      setProjectCustomerHasMore(Boolean(nextCursor));
+      setProjectCustomerOptions((prev) => {
+        const merged = reset ? nextItems : [...prev, ...nextItems];
+        const deduped = [];
+        const seen = new Set();
+        for (const item of merged) {
+          const key = String(item?.id || '');
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          deduped.push(item);
+        }
+        return deduped;
+      });
+      return nextItems;
+    } catch (err) {
+      showToast(err?.message || 'Failed to load customers for project picker.');
+      return [];
+    } finally {
+      if (reset) setProjectCustomerLoading(false);
+      else setProjectCustomerLoadMoreBusy(false);
+    }
+  };
+
   useEffect(() => {
     if (!isActive || !canManage || hasLoaded) return;
     const stop = showGlobalLoader ? showGlobalLoader('Loading projects...', { center: true }) : () => {};
@@ -303,6 +352,23 @@ export default function Projects() {
   }, [isActive, canManage, hasLoaded, refreshTick, pageTab]);
 
   useEffect(() => {
+    if (!projectModalOpen || !projectCustomerPickerOpen) return;
+    if (skipNextProjectCustomerSearchRef.current) {
+      skipNextProjectCustomerSearchRef.current = false;
+      return;
+    }
+    const q = String(projectCustomerSearch || '').trim();
+    if (!q) {
+      loadProjectCustomerOptions({ reset: true }).catch(() => {});
+      return undefined;
+    }
+    const handle = setTimeout(() => {
+      loadProjectCustomerOptions({ reset: true }).catch(() => {});
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [projectModalOpen, projectCustomerPickerOpen, projectCustomerSearch]);
+
+  useEffect(() => {
     if (!isActive || !canManage || pageTab !== 'projects') return;
     const node = sentinelRef.current;
     if (!node) return;
@@ -321,6 +387,11 @@ export default function Projects() {
     setEditProjectId('');
     setProjectForm(EMPTY_PROJECT_FORM);
     setProjectFormError('');
+    setProjectCustomerSearch('');
+    setProjectCustomerPickerOpen(false);
+    setProjectCustomerOptions([]);
+    setProjectCustomerCursor(null);
+    setProjectCustomerHasMore(false);
     setProjectModalOpen(true);
   };
 
@@ -340,6 +411,11 @@ export default function Projects() {
       advancedOpen: false
     });
     setProjectFormError('');
+    setProjectCustomerSearch('');
+    setProjectCustomerPickerOpen(false);
+    setProjectCustomerOptions([]);
+    setProjectCustomerCursor(null);
+    setProjectCustomerHasMore(false);
     setProjectModalOpen(true);
   };
 
@@ -506,6 +582,12 @@ export default function Projects() {
     }
   };
 
+  const selectedProjectCustomer = [...projectCustomerOptions, ...customers]
+    .find((customer) => String(customer?.id || '') === String(projectForm.customerId || ''));
+  const selectedProjectCustomerLabel = selectedProjectCustomer
+    ? (selectedProjectCustomer.fullName || selectedProjectCustomer.id || '')
+    : '';
+
   if (!isActive) return <div id="projectsPage" className="tab-page hidden" />;
   if (!canManage) return <div id="projectsPage" className="tab-page active section card">Projects management is admin only.</div>;
 
@@ -529,7 +611,7 @@ export default function Projects() {
               </div>
               <div className="home-personal-grid" style={{ marginBottom: 10 }}>
                 <div className="metric"><span className="metric-label">Waiting Projects</span><span className="metric-value">{counts.waiting}</span></div>
-                <div className="metric"><span className="metric-label">Ongoing Projects</span><span className="metric-value">{counts.ongoing}</span></div>
+                <div className="metric projects-ongoing-metric"><span className="metric-label">Ongoing Projects</span><span className="metric-value">{counts.ongoing}</span></div>
               </div>
               <div className="prj-filters-panel">
                 <div className="prj-filter-group prj-filter-group-compact">
@@ -552,6 +634,9 @@ export default function Projects() {
                 const addressRaw = String(project.address?.raw || '').trim();
                 const directionsHref = buildDirectionsHref(addressRaw);
                 const customer = project.customer || {};
+                const customerPhone = String(customer.phone || project.clientPhone || '').trim();
+                const customerPhoneHref = customerPhone ? `tel:${customerPhone.replace(/\s+/g, '')}` : '';
+                const customerSmsHref = customerPhone ? `sms:${customerPhone.replace(/\s+/g, '')}` : '';
                 return (
                   <div key={project.id} className="prj-item" data-status={statusLabel}>
                     <div className="prj-row1"><div className="prj-title">{project.description || 'Untitled project'}</div><span className={`pill ${statusLabel}`}>{statusLabel}</span></div>
@@ -566,7 +651,34 @@ export default function Projects() {
                     {(customer.fullName || customer.phone || customer.email || customer.address || project.clientFullName || project.clientPhone || project.clientEmail) ? (
                       <div className="prj-client-block">
                         <div className="prj-client-line"><strong>Customer:</strong> {customer.fullName || project.clientFullName || '-'}</div>
-                        {(customer.phone || project.clientPhone) ? <div className="prj-client-line"><strong>Phone:</strong> {customer.phone || project.clientPhone}</div> : null}
+                        {customerPhone ? (
+                          <div className="prj-client-line">
+                            <strong>Phone:</strong>
+                            <span className="address-link" style={{ display: 'inline-flex', marginLeft: 6 }}>
+                              {customerPhoneHref ? (
+                                <a
+                                  className="address-link-icon-btn"
+                                  href={customerPhoneHref}
+                                  aria-label={`Call ${customer.fullName || project.clientFullName || 'customer'}`}
+                                  title="Call"
+                                >
+                                  <FiPhone />
+                                </a>
+                              ) : null}
+                              {customerSmsHref ? (
+                                <a
+                                  className="address-link-icon-btn"
+                                  href={customerSmsHref}
+                                  aria-label={`Message ${customer.fullName || project.clientFullName || 'customer'}`}
+                                  title="Message"
+                                >
+                                  <FiMessageCircle />
+                                </a>
+                              ) : null}
+                              <span className="address-link-text">{customerPhone}</span>
+                            </span>
+                          </div>
+                        ) : null}
                         {(customer.email || project.clientEmail) ? <div className="prj-client-line"><strong>Email:</strong> <a href={`mailto:${customer.email || project.clientEmail}`}>{customer.email || project.clientEmail}</a></div> : null}
                         {customer.address ? <div className="prj-client-line"><strong>Address:</strong> {customer.address}</div> : null}
                       </div>
@@ -653,7 +765,7 @@ export default function Projects() {
         ) : null}
       </div>
 
-      <SimpleModal open={projectModalOpen} onClose={() => { if (!projectSaving) setProjectModalOpen(false); }} title={editProjectId ? 'Edit Project' : 'New Project'}>
+      <SimpleModal open={projectModalOpen} onClose={() => { if (!projectSaving) { setProjectModalOpen(false); setProjectCustomerSearch(''); setProjectCustomerPickerOpen(false); setProjectCustomerOptions([]); setProjectCustomerCursor(null); setProjectCustomerHasMore(false); } }} title={editProjectId ? 'Edit Project' : 'New Project'}>
         <div className="modal-form-grid" style={{ position: 'relative' }}>
           {projectSaving ? <div className="modal-saving-overlay" aria-live="polite" aria-busy="true"><FiLoader className="btn-spinner" style={{ width: 26, height: 26 }} /><div>Saving project...</div></div> : null}
           <input className="full" placeholder="Description" value={projectForm.description} onChange={(e) => setProjectForm((prev) => ({ ...prev, description: e.target.value }))} />
@@ -670,22 +782,98 @@ export default function Projects() {
           </div>
           <input type="date" placeholder="Estimated start date" value={projectForm.estimatedStartAt} onChange={(e) => setProjectForm((prev) => ({ ...prev, estimatedStartAt: e.target.value }))} disabled={projectSaving} />
           <input type="number" min="0" step="0.01" placeholder="Quote amount" value={projectForm.quoteAmount} onChange={(e) => setProjectForm((prev) => ({ ...prev, quoteAmount: e.target.value }))} disabled={projectSaving} />
-          <select
+          <input
             className="full"
-            value={projectForm.customerId}
+            placeholder="Search customer for project"
+            value={projectCustomerPickerOpen ? projectCustomerSearch : selectedProjectCustomerLabel}
+            onFocus={async () => {
+              setProjectCustomerPickerOpen(true);
+              if (!projectCustomerPickerOpen) setProjectCustomerSearch('');
+              await loadProjectCustomerOptions({ reset: true, queryOverride: '' });
+            }}
+            onClick={async () => {
+              setProjectCustomerPickerOpen((prev) => !prev);
+              if (!projectCustomerPickerOpen) setProjectCustomerSearch('');
+              if (!projectCustomerPickerOpen) await loadProjectCustomerOptions({ reset: true, queryOverride: '' });
+            }}
             onChange={(e) => {
-              const nextCustomerId = e.target.value;
-              const selectedCustomer = customers.find((customer) => String(customer?.id || '') === String(nextCustomerId));
-              setProjectForm((prev) => ({
-                ...prev,
-                customerId: nextCustomerId,
-                addressRaw: selectedCustomer?.address ? selectedCustomer.address : prev.addressRaw
-              }));
+              setProjectCustomerPickerOpen(true);
+              setProjectCustomerSearch(e.target.value);
+            }}
+            disabled={projectSaving}
+          />
+          {projectCustomerPickerOpen ? (
+          <div
+            className="full fin-expense-project-picker"
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
+              if (!nearBottom) return;
+              loadProjectCustomerOptions({ reset: false }).catch(() => {});
             }}
           >
-            <option value="">No customer</option>
-            {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.fullName || customer.id}</option>)}
-          </select>
+            <button
+              type="button"
+              className={`fin-expense-project-item${projectForm.customerId ? '' : ' active'}`}
+              onClick={() => {
+                setProjectForm((prev) => ({ ...prev, customerId: '' }));
+                skipNextProjectCustomerSearchRef.current = true;
+                setProjectCustomerSearch('');
+                setProjectCustomerPickerOpen(false);
+              }}
+              disabled={projectSaving}
+            >
+              <span className="fin-expense-status none">NONE</span>
+              <span className="fin-expense-project-label">No customer</span>
+            </button>
+            {projectCustomerOptions.map((customer) => (
+              <button
+                key={customer.id}
+                type="button"
+                className={`fin-expense-project-item${String(projectForm.customerId || '') === String(customer.id) ? ' active' : ''}`}
+                onClick={() => {
+                  setProjectForm((prev) => ({
+                    ...prev,
+                    customerId: String(customer.id),
+                    addressRaw: customer?.address ? customer.address : prev.addressRaw
+                  }));
+                  skipNextProjectCustomerSearchRef.current = true;
+                  setProjectCustomerSearch(customer.fullName || customer.id || '');
+                  setProjectCustomerPickerOpen(false);
+                }}
+                disabled={projectSaving}
+              >
+                <span className="fin-expense-status none">CUST</span>
+                <span className="fin-expense-project-label">{customer.fullName || customer.id || '-'}</span>
+              </button>
+            ))}
+            {!projectCustomerLoading && !projectCustomerOptions.length ? (
+              <div className="muted fin-expense-project-empty">No customers found.</div>
+            ) : null}
+          </div>
+          ) : null}
+          {projectCustomerPickerOpen && projectCustomerLoading ? (
+            <div className="muted full row" style={{ gap: 8, alignItems: 'center' }}>
+              <FiLoader className="btn-spinner" />
+              <span>Loading customers...</span>
+            </div>
+          ) : null}
+          {projectCustomerPickerOpen && projectCustomerLoadMoreBusy ? (
+            <div className="muted full row" style={{ gap: 8, alignItems: 'center' }}>
+              <FiLoader className="btn-spinner" />
+              <span>Loading more customers...</span>
+            </div>
+          ) : null}
+          {projectCustomerPickerOpen && !projectCustomerLoading && projectCustomerHasMore ? (
+            <button
+              type="button"
+              className="ghost btn-tone-neutral"
+              onClick={() => loadProjectCustomerOptions({ reset: false })}
+              disabled={projectCustomerLoadMoreBusy || projectSaving}
+            >
+              {projectCustomerLoadMoreBusy ? 'Loading...' : 'Load more customers'}
+            </button>
+          ) : null}
           <div className="full row" style={{ justifyContent: 'flex-end' }}><button type="button" className="ghost btn-tone-info" onClick={openNewCustomerModal}>+ New Customer</button></div>
           <textarea className="full" rows={3} placeholder="Materials (optional)" value={projectForm.materials} onChange={(e) => setProjectForm((prev) => ({ ...prev, materials: e.target.value }))} disabled={projectSaving} />
           <div className="full"><button type="button" className="ghost btn-tone-purple" onClick={() => setProjectForm((prev) => ({ ...prev, advancedOpen: !prev.advancedOpen }))} disabled={projectSaving}>{projectForm.advancedOpen ? 'Hide advanced' : 'Show advanced'}</button></div>

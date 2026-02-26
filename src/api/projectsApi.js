@@ -4,6 +4,10 @@ export function listProjects(query) {
   return request('/api/projects', { query });
 }
 
+export function searchProjectsForExpenses(query) {
+  return request('/api/projects/search-for-expenses', { query });
+}
+
 export function projectStatusCounts() {
   return request('/api/projects/status-counts');
 }

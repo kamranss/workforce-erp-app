@@ -72,13 +72,24 @@ export default function Home() {
   const [homeTasks, setHomeTasks] = useState([]);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [taskEditId, setTaskEditId] = useState('');
-  const [taskForm, setTaskForm] = useState({ title: '', description: '', projectId: '', status: 'created' });
+  const [taskForm, setTaskForm] = useState({
+    title: '',
+    description: '',
+    projectId: '',
+    assignedToUserIds: [],
+    status: 'created',
+    dueDate: ''
+  });
+  const [taskUserOptions, setTaskUserOptions] = useState([]);
   const [taskProjects, setTaskProjects] = useState([]);
   const [taskProjectsCursor, setTaskProjectsCursor] = useState(null);
   const [taskProjectsLoading, setTaskProjectsLoading] = useState(false);
+  const [taskUsersPickerOpen, setTaskUsersPickerOpen] = useState(false);
+  const [taskProjectsPickerOpen, setTaskProjectsPickerOpen] = useState(false);
+  const [taskUsersSearch, setTaskUsersSearch] = useState('');
+  const [taskProjectsSearch, setTaskProjectsSearch] = useState('');
   const [taskCursor, setTaskCursor] = useState(null);
   const [taskStatusFilter, setTaskStatusFilter] = useState('');
-  const [taskIncludeDone, setTaskIncludeDone] = useState(false);
   const [taskLoadBusy, setTaskLoadBusy] = useState(false);
   const [taskLoadMoreBusy, setTaskLoadMoreBusy] = useState(false);
   const [taskDetailOpen, setTaskDetailOpen] = useState(false);
@@ -202,10 +213,12 @@ export default function Home() {
         }, { cache: fresh ? false : undefined })
         : await myTasks({
           limit: 20,
-          cursor: reset ? undefined : taskCursor,
-          includeDone: taskIncludeDone ? true : undefined
+          cursor: reset ? undefined : taskCursor
         }, { cache: fresh ? false : undefined });
-      const nextItems = Array.isArray(res?.items) ? res.items : [];
+      const nextItemsRaw = Array.isArray(res?.items) ? res.items : [];
+      const nextItems = isAdmin
+        ? nextItemsRaw
+        : nextItemsRaw.filter((task) => normalizeTaskStatus(task?.status) !== 'done');
       setHomeTasks((prev) => (reset ? nextItems : [...prev, ...nextItems]));
       setTaskCursor(res?.nextCursor || null);
     } finally {
@@ -215,15 +228,17 @@ export default function Home() {
     }
   };
 
-  const loadTaskProjects = async ({ reset = false } = {}) => {
+  const loadTaskProjects = async ({ reset = false, queryOverride } = {}) => {
     if (taskProjectsLoading || taskProjectsLoadLockRef.current) return;
     if (!reset && !taskProjectsCursor) return;
     taskProjectsLoadLockRef.current = true;
     setTaskProjectsLoading(true);
     try {
+      const q = String((queryOverride ?? taskProjectsSearch) || '').trim();
       const res = await listProjects({
         limit: reset ? 5 : 20,
-        cursor: reset ? undefined : taskProjectsCursor
+        cursor: reset ? undefined : taskProjectsCursor,
+        q: q || undefined
       });
       const items = Array.isArray(res?.items) ? res.items : [];
       const nextCursor =
@@ -251,6 +266,48 @@ export default function Home() {
       setTaskProjectsLoading(false);
     }
   };
+
+  const loadTaskUsers = async (queryOverride) => {
+    if (!isAdmin) return;
+    try {
+      const q = String(queryOverride ?? taskUsersSearch).trim();
+      const res = await listUsers({ limit: 100, q: q || undefined });
+      const rows = Array.isArray(res?.items) ? res.items : [];
+      const filtered = rows.filter((u) => {
+        const roleKey = String(u?.role || '').toLowerCase();
+        return (roleKey === 'user' || roleKey === 'employee') && u?.isActive !== false;
+      });
+      setTaskUserOptions(filtered);
+    } catch (err) {
+      showToast(err?.message || 'Failed to load users for task assignment.');
+    }
+  };
+
+  const ensureTaskUsersLoaded = async () => {
+    if (taskUserOptions.length) return;
+    await loadTaskUsers('');
+  };
+
+  const ensureTaskProjectsLoaded = async () => {
+    if (taskProjects.length) return;
+    await loadTaskProjects({ reset: true, queryOverride: '' });
+  };
+
+  useEffect(() => {
+    if (!taskModalOpen || !taskUsersPickerOpen || !isAdmin) return;
+    const handle = setTimeout(() => {
+      loadTaskUsers(taskUsersSearch);
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [taskModalOpen, taskUsersPickerOpen, taskUsersSearch, isAdmin]);
+
+  useEffect(() => {
+    if (!taskModalOpen || !taskProjectsPickerOpen || !isAdmin) return;
+    const handle = setTimeout(() => {
+      loadTaskProjects({ reset: true, queryOverride: taskProjectsSearch });
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [taskModalOpen, taskProjectsPickerOpen, taskProjectsSearch, isAdmin]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -313,7 +370,7 @@ export default function Home() {
       return;
     }
     loadHomeTasks({ reset: true }).catch((err) => setError(err?.message || 'Failed to load tasks.'));
-  }, [hasLoaded, isAdmin, taskStatusFilter, taskIncludeDone]);
+  }, [hasLoaded, isAdmin, taskStatusFilter]);
 
   useEffect(() => {
     if (!isAdmin || !openEntries.length) return;
@@ -333,26 +390,36 @@ export default function Home() {
     loadHomeTasks({ reset: true }).catch((err) => setError(err?.message || 'Failed to load tasks.'));
   }, [isActive, hasLoaded, isAdmin, refreshTick]);
 
-  useEffect(() => {
-    if (!taskModalOpen || !isAdmin) return;
-    loadTaskProjects({ reset: true });
-  }, [taskModalOpen, isAdmin]);
-
   const saveTask = async () => {
     setTaskSaving(true);
     try {
+      const title = String(taskForm.title || '').trim();
+      if (!title) {
+        showToast('Title is required.');
+        return;
+      }
+      const dueDateIso = taskForm.dueDate ? new Date(taskForm.dueDate).toISOString() : '';
+      if (!dueDateIso || Number.isNaN(new Date(dueDateIso).getTime())) {
+        showToast('Valid due date is required.');
+        return;
+      }
+      const assignedIds = Array.isArray(taskForm.assignedToUserIds)
+        ? taskForm.assignedToUserIds.map((id) => String(id || '').trim()).filter(Boolean)
+        : [];
       const payload = {
-        title: taskForm.title,
+        title,
         description: taskForm.description || undefined,
         projectId: taskForm.projectId || undefined,
-        status: taskForm.status
+        assignedToUserIds: assignedIds,
+        status: taskForm.status || 'created',
+        dueDate: dueDateIso
       };
       if (taskEditId) {
         await updateTask(taskEditId, payload);
       } else {
         await createTask(payload);
       }
-      setTaskForm({ title: '', description: '', projectId: '', status: 'created' });
+      setTaskForm({ title: '', description: '', projectId: '', assignedToUserIds: [], status: 'created', dueDate: '' });
       setTaskEditId('');
       setTaskModalOpen(false);
       await loadHomeTasks({ reset: true, fresh: true, force: true });
@@ -417,13 +484,29 @@ export default function Home() {
   };
 
   const startEditTask = (task) => {
+    const assignedIdsFromArray = Array.isArray(task?.assignedToUserIds)
+      ? task.assignedToUserIds
+      : [];
+    const assignedIdsFromObjects = Array.isArray(task?.assignedToUsers)
+      ? task.assignedToUsers.map((u) => u?.id || u?._id)
+      : [];
+    const assignedToUserIds = [...assignedIdsFromArray, ...assignedIdsFromObjects]
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+      .filter((id, idx, arr) => arr.indexOf(id) === idx);
     setTaskEditId(String(task?.id || ''));
     setTaskForm({
       title: task?.title || '',
       description: task?.description || '',
       projectId: task?.projectId || '',
-      status: task?.status || 'created'
+      assignedToUserIds,
+      status: task?.status || 'created',
+      dueDate: task?.dueDate ? toLocalDateTimeInputValue(task.dueDate) : ''
     });
+    setTaskUsersSearch('');
+    setTaskProjectsSearch('');
+    setTaskUsersPickerOpen(false);
+    setTaskProjectsPickerOpen(false);
     setTaskModalOpen(true);
   };
 
@@ -439,6 +522,66 @@ export default function Home() {
     const inProjects = taskProjects.find((project) => String(project?.id || '') === projectId);
     return String(inProjects?.description || inProjects?.address?.raw || '').trim() || 'No project';
   };
+  const resolveTaskProjectMeta = (task) => {
+    const projectId = String(task?.projectId || '').trim();
+    const linkedProject = projectId
+      ? taskProjects.find((project) => String(project?.id || '') === projectId)
+      : null;
+    const projectDescription = String(
+      task?.project?.description
+      || task?.projectDescription
+      || linkedProject?.description
+      || ''
+    ).trim() || 'No project';
+    const customerFullName = String(
+      task?.project?.customer?.fullName
+      || task?.project?.customerName
+      || linkedProject?.customer?.fullName
+      || linkedProject?.clientFullName
+      || ''
+    ).trim() || '-';
+    const projectAddress = String(
+      task?.project?.address?.raw
+      || task?.project?.address?.normalized
+      || task?.projectAddressRaw
+      || linkedProject?.address?.raw
+      || linkedProject?.address?.normalized
+      || ''
+    ).trim() || '-';
+    return { projectDescription, customerFullName, projectAddress };
+  };
+  const resolveTaskAssignees = (task) => {
+    const namesFromObjects = Array.isArray(task?.assignedToUsers)
+      ? task.assignedToUsers.map((u) => `${u?.name || ''} ${u?.surname || ''}`.trim()).filter(Boolean)
+      : [];
+    if (namesFromObjects.length) return namesFromObjects.join(', ');
+    const ids = Array.isArray(task?.assignedToUserIds)
+      ? task.assignedToUserIds.map((id) => String(id || '').trim()).filter(Boolean)
+      : [];
+    if (!ids.length) return '-';
+    const namesFromLookup = ids.map((id) => {
+      const found = taskUserOptions.find((u) => String(u?.id || '') === id);
+      return found ? `${found?.name || ''} ${found?.surname || ''}`.trim() : id;
+    }).filter(Boolean);
+    return namesFromLookup.length ? namesFromLookup.join(', ') : '-';
+  };
+  const selectedAssigneesLabel = (() => {
+    const ids = Array.isArray(taskForm.assignedToUserIds)
+      ? taskForm.assignedToUserIds.map((id) => String(id || '').trim()).filter(Boolean)
+      : [];
+    if (!ids.length) return '';
+    const names = ids.map((id) => {
+      const found = taskUserOptions.find((u) => String(u?.id || '') === id);
+      return found ? `${found?.name || ''} ${found?.surname || ''}`.trim() : id;
+    }).filter(Boolean);
+    return names.join(', ');
+  })();
+  const selectedProjectLabel = (() => {
+    const projectId = String(taskForm.projectId || '').trim();
+    if (!projectId) return '';
+    const found = taskProjects.find((project) => String(project?.id || '') === projectId);
+    return found ? (found.description || found.id || '') : projectId;
+  })();
 
   const renderTaskDetailModal = () => (
     <SimpleModal open={taskDetailOpen} onClose={() => setTaskDetailOpen(false)} title="Task Details" size="sm">
@@ -455,6 +598,10 @@ export default function Home() {
           <div className="task-detail-chip">
             <span>Due Date</span>
             <strong>{taskDetail?.dueDate ? new Date(taskDetail.dueDate).toLocaleString() : '-'}</strong>
+          </div>
+          <div className="task-detail-chip full">
+            <span>Assigned</span>
+            <strong>{resolveTaskAssignees(taskDetail)}</strong>
           </div>
           <div className="task-detail-chip full">
             <span>Project</span>
@@ -546,9 +693,6 @@ export default function Home() {
               <h3>Assigned Tasks</h3>
             </div>
             <div className="row" style={{ gap: 8 }}>
-              <button type="button" className={`prj-time-btn btn-tone-purple${taskIncludeDone ? ' active' : ''}`} onClick={() => setTaskIncludeDone((prev) => !prev)}>
-                {taskIncludeDone ? 'Hide Done' : 'Include Done'}
-              </button>
               <div className="pill">{homeTasks.length}</div>
             </div>
           </div>
@@ -556,12 +700,19 @@ export default function Home() {
           {!error && !homeTasks.length ? <div className="task-empty">No assigned tasks.</div> : null}
           <div className="task-list">
             {homeTasks.map((task) => (
+              (() => {
+                const projectMeta = resolveTaskProjectMeta(task);
+                return (
               <div key={task.id} className={`task-row ${statusClass(task.status)}`}>
                 <span className={`task-status-chip task-status-corner ${normalizeTaskStatus(task.status)}`}>{formatTaskStatus(task.status)}</span>
                 <div className="task-title">{task.title || 'Untitled task'}</div>
                 <div className="task-location">{task.description || 'No description'}</div>
                 <div className="task-footer">
                   <span className="task-due">{task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'No due date'}</span>
+                  <span className="task-due">{`Assigned: ${resolveTaskAssignees(task)}`}</span>
+                  <span className="task-due">
+                    {`${projectMeta.projectDescription} | Customer: ${projectMeta.customerFullName} | Address: ${projectMeta.projectAddress}`}
+                  </span>
                 </div>
                 <div className="task-actions">
                   <button type="button" className="ghost btn-tone-info btn-with-spinner" onClick={() => openTaskDetail(task.id)} disabled={taskViewingId === String(task.id)}>
@@ -570,6 +721,8 @@ export default function Home() {
                   </button>
                 </div>
               </div>
+                );
+              })()
             ))}
           </div>
           {!taskLoadBusy && taskCursor ? (
@@ -711,7 +864,11 @@ export default function Home() {
             <div className="row" style={{ gap: 8 }}>
               <button type="button" className="ghost btn-tone-primary" onClick={() => {
                 setTaskEditId('');
-                setTaskForm({ title: '', description: '', projectId: '', status: 'created' });
+                setTaskForm({ title: '', description: '', projectId: '', assignedToUserIds: [], status: 'created', dueDate: '' });
+                setTaskUsersSearch('');
+                setTaskProjectsSearch('');
+                setTaskUsersPickerOpen(false);
+                setTaskProjectsPickerOpen(false);
                 setTaskModalOpen(true);
               }}>
                 <FiFilePlus />
@@ -728,12 +885,19 @@ export default function Home() {
           {!homeTasks.length ? <div className="task-empty">No tasks yet.</div> : null}
           <div className="task-list">
           {homeTasks.slice(0, 20).map((task) => (
+            (() => {
+              const projectMeta = resolveTaskProjectMeta(task);
+              return (
             <div key={task.id} className={`task-row ${statusClass(task.status)}`}>
               <span className={`task-status-chip task-status-corner ${normalizeTaskStatus(task.status)}`}>{formatTaskStatus(task.status)}</span>
               <div className="task-title">{task.title || 'Untitled task'}</div>
               <div className="task-location">{task.description || 'No description'}</div>
               <div className="task-footer">
-                <span className="task-due">{task.projectId || 'No project'}</span>
+                <span className="task-due">{task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'No due date'}</span>
+                <span className="task-due">{`Assigned: ${resolveTaskAssignees(task)}`}</span>
+                <span className="task-due">
+                  {`${projectMeta.projectDescription} | Customer: ${projectMeta.customerFullName} | Address: ${projectMeta.projectAddress}`}
+                </span>
               </div>
               <div className="task-actions">
                 <button type="button" className="ghost btn-tone-info btn-with-spinner" onClick={() => openTaskDetail(task.id)} disabled={taskViewingId === String(task.id)}>
@@ -751,6 +915,8 @@ export default function Home() {
                 </button>
               </div>
             </div>
+              );
+            })()
           ))}
         </div>
         {!taskLoadBusy && taskCursor ? (
@@ -761,16 +927,110 @@ export default function Home() {
         ) : null}
       </div>
 
-      <SimpleModal open={taskModalOpen} onClose={() => setTaskModalOpen(false)} title={taskEditId ? 'Edit Task' : 'Create Task'} size="sm">
+      <SimpleModal open={taskModalOpen} onClose={() => {
+        setTaskUsersSearch('');
+        setTaskProjectsSearch('');
+        setTaskUsersPickerOpen(false);
+        setTaskProjectsPickerOpen(false);
+        setTaskModalOpen(false);
+      }} title={taskEditId ? 'Edit Task' : 'Create Task'} size="sm">
         <div className="modal-form-grid">
           <input className="full" placeholder="title" value={taskForm.title} onChange={(e) => setTaskForm({ ...taskForm, title: e.target.value })} />
           <input className="full" placeholder="description" value={taskForm.description} onChange={(e) => setTaskForm({ ...taskForm, description: e.target.value })} />
+          <input
+            className="full"
+            type="datetime-local"
+            placeholder="Due date"
+            value={taskForm.dueDate}
+            onChange={(e) => setTaskForm({ ...taskForm, dueDate: e.target.value })}
+          />
+          <div className="full">
+            <div className="task-hint" style={{ marginBottom: 6 }}>Assign Users (optional)</div>
+            <input
+              className="full"
+              placeholder="Search users to assign"
+              value={taskUsersPickerOpen ? taskUsersSearch : selectedAssigneesLabel}
+              onFocus={async () => {
+                if (!taskUsersPickerOpen) setTaskUsersSearch('');
+                setTaskProjectsPickerOpen(false);
+                setTaskUsersPickerOpen(true);
+                await ensureTaskUsersLoaded().catch(() => {});
+              }}
+              onClick={async () => {
+                if (!taskUsersPickerOpen) setTaskUsersSearch('');
+                setTaskProjectsPickerOpen(false);
+                setTaskUsersPickerOpen((prev) => !prev);
+                await ensureTaskUsersLoaded().catch(() => {});
+              }}
+              onChange={(e) => {
+                setTaskProjectsPickerOpen(false);
+                setTaskUsersPickerOpen(true);
+                setTaskUsersSearch(e.target.value);
+              }}
+              style={{ marginBottom: 8 }}
+            />
+            {taskUsersPickerOpen ? (
+            <div className="task-project-scroll task-project-picker" style={{ maxHeight: 160 }}>
+              {taskUserOptions.map((user) => {
+                const userId = String(user?.id || '');
+                const selected = Array.isArray(taskForm.assignedToUserIds) && taskForm.assignedToUserIds.includes(userId);
+                return (
+                  <button
+                    key={userId}
+                    type="button"
+                    className={`task-project-item${selected ? ' selected' : ''}`}
+                    onClick={() => {
+                      const prevIds = Array.isArray(taskForm.assignedToUserIds) ? taskForm.assignedToUserIds : [];
+                      const nextIds = selected
+                        ? prevIds.filter((id) => id !== userId)
+                        : [...prevIds, userId];
+                      setTaskForm({ ...taskForm, assignedToUserIds: nextIds });
+                      setTaskUsersPickerOpen(false);
+                    }}
+                  >
+                    <span className="task-project-title">{`${user?.name || ''} ${user?.surname || ''}`.trim() || user?.email || userId}</span>
+                    <small className="task-project-meta">{user?.email || '-'}</small>
+                  </button>
+                );
+              })}
+              {!taskUserOptions.length ? <div className="muted">No users found.</div> : null}
+            </div>
+            ) : null}
+          </div>
           <div className="full">
             <div className="task-hint" style={{ marginBottom: 6 }}>Project (optional): latest 5 first, scroll to load more.</div>
+            <input
+              className="full"
+              placeholder="Search project"
+              value={taskProjectsPickerOpen ? taskProjectsSearch : selectedProjectLabel}
+              onFocus={async () => {
+                if (!taskProjectsPickerOpen) setTaskProjectsSearch('');
+                setTaskUsersPickerOpen(false);
+                setTaskProjectsPickerOpen(true);
+                await ensureTaskProjectsLoaded().catch(() => {});
+              }}
+              onClick={async () => {
+                if (!taskProjectsPickerOpen) setTaskProjectsSearch('');
+                setTaskUsersPickerOpen(false);
+                setTaskProjectsPickerOpen((prev) => !prev);
+                await ensureTaskProjectsLoaded().catch(() => {});
+              }}
+              onChange={(e) => {
+                setTaskUsersPickerOpen(false);
+                setTaskProjectsPickerOpen(true);
+                setTaskProjectsSearch(e.target.value);
+              }}
+              style={{ marginBottom: 8 }}
+            />
+            {taskProjectsPickerOpen ? (
+            <>
             <button
               type="button"
               className={`ghost btn-tone-purple ${taskForm.projectId ? '' : 'active'}`}
-              onClick={() => setTaskForm({ ...taskForm, projectId: '' })}
+              onClick={() => {
+                setTaskForm({ ...taskForm, projectId: '' });
+                setTaskProjectsPickerOpen(false);
+              }}
               style={{ marginBottom: 8 }}
             >
               No project
@@ -792,7 +1052,10 @@ export default function Home() {
                     key={project.id}
                     type="button"
                     className={`task-project-item${selected ? ' selected' : ''}`}
-                    onClick={() => setTaskForm({ ...taskForm, projectId: project.id })}
+                    onClick={() => {
+                      setTaskForm({ ...taskForm, projectId: project.id });
+                      setTaskProjectsPickerOpen(false);
+                    }}
                   >
                     <span className="task-project-title">{project.description || project.id}</span>
                     <small className="task-project-meta">{project.status || 'unknown'} | {project.locationKey || '-'}</small>
@@ -811,6 +1074,8 @@ export default function Home() {
               {!taskProjects.length && !taskProjectsLoading ? <div className="muted">No projects found.</div> : null}
               {taskProjectsLoading ? <div className="muted">Loading projects...</div> : null}
             </div>
+            </>
+            ) : null}
           </div>
           <div className="full row" style={{ justifyContent: 'flex-end' }}>
             <button type="button" className="ghost btn-tone-neutral" onClick={() => setTaskModalOpen(false)}>Cancel</button>
