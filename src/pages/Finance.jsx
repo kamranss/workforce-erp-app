@@ -288,6 +288,16 @@ function donutSegmentMarkers(segments, minPct = 5) {
   return out;
 }
 
+function companyDonutMarkerStyle(marker, accentColor) {
+  const x = Math.max(-0.74, Math.min(0.74, Number(marker?.x || 0)));
+  const y = Math.max(-0.76, Math.min(0.76, Number(marker?.y || 0)));
+  return {
+    left: `${50 + (x * 74)}%`,
+    top: `${50 + (y * 64)}%`,
+    '--marker-accent': accentColor
+  };
+}
+
 function percentageHealth(value, mode = 'consumed') {
   const pct = Number(value || 0);
   if (mode === 'remaining') {
@@ -2428,11 +2438,10 @@ export default function Finance() {
                             <span
                               key={`company-labor-${marker.key}`}
                               className={`fin-donut-marker fin-company-donut-marker${marker.x >= 0 ? ' is-right' : ' is-left'}`}
-                              style={{
-                                left: `${50 + (marker.x * 79)}%`,
-                                top: `${50 + (marker.y * 60)}%`,
-                                '--marker-accent': companyExpensesLaborChart.segments.find((item) => item.name === marker.label)?.color || COMPANY_EXPENSES_LABOR_COLORS[0]
-                              }}
+                              style={companyDonutMarkerStyle(
+                                marker,
+                                companyExpensesLaborChart.segments.find((item) => item.name === marker.label)?.color || COMPANY_EXPENSES_LABOR_COLORS[0]
+                              )}
                               title={`${marker.label}: ${marker.pct.toFixed(1)}%`}
                             >
                               <strong>{marker.label}</strong>
@@ -2480,11 +2489,10 @@ export default function Finance() {
                             <span
                               key={`company-category-${marker.key}`}
                               className={`fin-donut-marker fin-company-donut-marker${marker.x >= 0 ? ' is-right' : ' is-left'}`}
-                              style={{
-                                left: `${50 + (marker.x * 79)}%`,
-                                top: `${50 + (marker.y * 60)}%`,
-                                '--marker-accent': companyExpensesCategoryChart.segments.find((item) => item.label === marker.label)?.color || COMPANY_EXPENSES_CATEGORY_COLORS[0]
-                              }}
+                              style={companyDonutMarkerStyle(
+                                marker,
+                                companyExpensesCategoryChart.segments.find((item) => item.label === marker.label)?.color || COMPANY_EXPENSES_CATEGORY_COLORS[0]
+                              )}
                               title={`${marker.label}: ${marker.pct.toFixed(1)}%`}
                             >
                               <strong>{marker.label}</strong>

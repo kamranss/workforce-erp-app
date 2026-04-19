@@ -6592,6 +6592,21 @@ body[data-theme="dark"] .fin-report-health.danger{
   align-items:start;
 }
 
+#financePage .fin-company-expenses-card .fin-report-overview-meta{
+  min-width:0;
+}
+
+@media (min-width:1024px){
+  #financePage .fin-company-expenses-card{
+    grid-template-columns:minmax(300px, 340px) minmax(0, 1fr);
+  }
+
+  #financePage .fin-company-expenses-card .fin-report-donut-wrap{
+    min-height:220px;
+    overflow:visible;
+  }
+}
+
 #financePage .fin-company-expenses-list-label{
   min-width:0;
   display:flex;
@@ -6661,6 +6676,12 @@ body[data-theme="dark"] #financePage .fin-company-expenses-scope-card{
 @media (max-width:880px){
   #financePage .fin-company-expenses-grid,
   #financePage .fin-company-expenses-scope-grid{
+    grid-template-columns:1fr;
+  }
+}
+
+@media (max-width:1240px){
+  #financePage .fin-company-expenses-grid{
     grid-template-columns:1fr;
   }
 }
