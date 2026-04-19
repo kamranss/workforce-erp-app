@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { FiChevronDown, FiLoader, FiPlusCircle, FiTrendingUp, FiUserPlus } from 'react-icons/fi';
+import { FiAlertTriangle, FiCheckCircle, FiChevronDown, FiDollarSign, FiLoader, FiNavigation, FiPlusCircle, FiTrendingUp, FiUserPlus, FiXCircle } from 'react-icons/fi';
 import { createBonus, deleteBonus, listBonuses, updateBonus } from '../api/bonusAndPenaltiesApi.js';
 import { createCustomerPayment, deleteCustomerPayment, listCustomerPayments, updateCustomerPayment } from '../api/customerPaymentsApi.js';
 import { createExpense, deleteExpense, listExpenses, updateExpense } from '../api/expensesApi.js';
 import { createPayment, deletePayment, listPayments, updatePayment } from '../api/paymentsApi.js';
-import { listOngoingProjects, listProjects, searchProjectsForExpenses } from '../api/projectsApi.js';
-import { customerPaymentsOverview, projectSummary, projectsFinanceOverview, userLiability } from '../api/reportsApi.js';
+import { listProjects, searchProjectsForExpenses } from '../api/projectsApi.js';
+import { companyExpensesOverview, customerPaymentsOverview, projectSummary, projectsFinanceOverview, userLiability } from '../api/reportsApi.js';
 import { createUser, deactivateUser, listUsers, updateUser } from '../api/usersApi.js';
 import SimpleModal from '../components/SimpleModal.jsx';
 import { useAuth } from '../context/AuthProvider.jsx';
@@ -30,6 +30,41 @@ const DATE_PRESETS = [
   { value: 'previousMonth', label: 'Previous Month' },
   { value: 'custom', label: 'Custom' }
 ];
+
+const EXPENSE_TYPE_OPTIONS = [
+  { value: 'gas', label: 'Gas' },
+  { value: 'utility', label: 'Utility' },
+  { value: 'maintenance', label: 'Maintenance' },
+  { value: 'vehicle', label: 'Vehicle' },
+  { value: 'food', label: 'Food' },
+  { value: 'tools', label: 'Tools' },
+  { value: 'city_expenses', label: 'City Expenses' },
+  { value: 'store', label: 'Store' },
+  { value: 'storage', label: 'Storage' },
+  { value: 'archcloset', label: 'Archcloset' },
+  { value: 'mobile', label: 'Mobile' },
+  { value: 'material', label: 'Material' },
+  { value: 'referral', label: 'Referral' },
+  { value: 'damage', label: 'Damage' },
+  { value: 'unknown', label: 'Unknown' },
+  { value: 'other', label: 'Other' }
+];
+const EXPENSE_MUTABLE_TYPE_OPTIONS = EXPENSE_TYPE_OPTIONS.filter((option) => option.value !== 'referral');
+
+const COMPANY_EXPENSES_LABOR_COLORS = ['#ef4444', '#f97316', '#f59e0b', '#10b981', '#0ea5e9', '#6366f1', '#8b5cf6', '#ec4899'];
+const COMPANY_EXPENSES_CATEGORY_COLORS = ['#f97316', '#f59e0b', '#84cc16', '#10b981', '#06b6d4', '#3b82f6', '#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#14b8a6', '#a855f7', '#64748b', '#94a3b8', '#475569', '#e11d48'];
+
+function isReferralType(value) {
+  return String(value || '').trim().toLowerCase() === 'referral';
+}
+
+function isReferralManagedErrorMessage(message) {
+  const text = String(message || '').toLowerCase();
+  return text.includes('referral expenses are managed automatically')
+    || text.includes('cannot be created manually')
+    || text.includes('cannot be updated manually')
+    || text.includes('cannot be deleted manually');
+}
 
 function toIsoStart(dateStr) {
   if (!dateStr) return undefined;
@@ -108,29 +143,74 @@ function hoursFromMinutes(minutes) {
   return (Number(minutes || 0) / 60).toFixed(2);
 }
 
-function buildFinanceOverviewChart(quoteAmount, laborUsed, _projectExpensesUsed, companyProjectRelatedExpensesUsed, remainingFromQuote) {
+function formatDateOrDash(value) {
+  if (!value) return '--';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '--';
+  return date.toLocaleDateString();
+}
+
+function formatDurationDaysOrDash(value) {
+  if (value === null || value === undefined || value === '') return '--';
+  const days = Number(value);
+  if (Number.isNaN(days)) return '--';
+  return `${days.toFixed(2)} days`;
+}
+
+function pickNullableNumber(source, keys) {
+  for (const key of keys) {
+    const value = source?.[key];
+    if (value === undefined || value === null || value === '') continue;
+    const parsed = Number(value);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return null;
+}
+
+function buildFinanceOverviewChart(
+  quoteAmount,
+  laborUsed,
+  _projectExpensesUsed,
+  companyProjectRelatedExpensesUsed,
+  companyOwnedExpensesUsed,
+  remainingFromQuote
+) {
   const quote = Math.max(0, Number(quoteAmount || 0));
   const labor = Math.max(0, Number(laborUsed || 0));
   const companyProjectRelatedExpenses = Math.max(0, Number(companyProjectRelatedExpensesUsed || 0));
+  const companyOwnedExpenses = Math.max(0, Number(companyOwnedExpensesUsed || 0));
   const remainingRaw = Number(remainingFromQuote || 0);
   const remaining = Math.max(0, remainingRaw);
-  const fallbackBase = labor + companyProjectRelatedExpenses + remaining;
+  const fallbackBase = labor + companyProjectRelatedExpenses + companyOwnedExpenses + remaining;
   const base = quote > 0 ? quote : Math.max(fallbackBase, 1);
 
   const laborPct = Math.max(0, Math.min(100, (labor / base) * 100));
   const companyProjectRelatedPct = Math.max(0, Math.min(100 - laborPct, (companyProjectRelatedExpenses / base) * 100));
-  const remainingPct = Math.max(0, 100 - laborPct - companyProjectRelatedPct);
-  const consumedPct = Math.max(0, Math.min(100, ((labor + companyProjectRelatedExpenses) / base) * 100));
+  const companyOwnedPct = Math.max(0, Math.min(100 - laborPct - companyProjectRelatedPct, (companyOwnedExpenses / base) * 100));
+  const remainingPct = Math.max(0, 100 - laborPct - companyProjectRelatedPct - companyOwnedPct);
+  const consumedPct = Math.max(0, Math.min(100, ((labor + companyProjectRelatedExpenses + companyOwnedExpenses) / base) * 100));
   const overrun = remainingRaw < 0
     ? Math.abs(remainingRaw)
-    : Math.max(0, (labor + companyProjectRelatedExpenses) - quote);
+    : Math.max(0, (labor + companyProjectRelatedExpenses + companyOwnedExpenses) - quote);
+
+  const companyOwnedStart = laborPct + companyProjectRelatedPct;
+  const companyOwnedEnd = companyOwnedStart + companyOwnedPct;
 
   const chartStyle = {
-    background: `conic-gradient(var(--fin-chart-labor) 0 ${laborPct}%, var(--fin-chart-company) ${laborPct}% ${laborPct + companyProjectRelatedPct}%, var(--fin-chart-remaining) ${laborPct + companyProjectRelatedPct}% ${laborPct + companyProjectRelatedPct + remainingPct}%, var(--fin-chart-track) ${laborPct + companyProjectRelatedPct + remainingPct}% 100%)`
+    background: `conic-gradient(var(--fin-chart-labor) 0 ${laborPct}%, var(--fin-chart-company) ${laborPct}% ${laborPct + companyProjectRelatedPct}%, var(--fin-chart-company-owned-start) ${companyOwnedStart}% ${companyOwnedEnd}%, var(--fin-chart-remaining) ${companyOwnedEnd}% ${companyOwnedEnd + remainingPct}%)`
   };
 
   const tone = consumedPct >= 75 ? 'danger' : consumedPct >= 50 ? 'warn' : 'good';
-  return { chartStyle, consumedPct, overrun, tone };
+  return {
+    chartStyle,
+    consumedPct,
+    overrun,
+    tone,
+    laborPct,
+    companyProjectRelatedPct,
+    companyOwnedPct,
+    remainingPct
+  };
 }
 
 function buildPaidPendingChart(paidAmount, pendingAmount) {
@@ -142,7 +222,95 @@ function buildPaidPendingChart(paidAmount, pendingAmount) {
   const chartStyle = {
     background: `conic-gradient(var(--fin-chart-paid) 0 ${paidPct}%, var(--fin-chart-pending) ${paidPct}% ${paidPct + pendingPct}%, var(--fin-chart-track) ${paidPct + pendingPct}% 100%)`
   };
-  return { chartStyle, paidPct };
+  return { chartStyle, paidPct, pendingPct };
+}
+
+function buildBreakdownChart(items, colors, emptyColor = 'rgba(148,163,184,0.22)') {
+  const source = Array.isArray(items) ? items : [];
+  const valid = source
+    .map((item, index) => {
+      const amount = Math.max(0, Number(item?.amount || 0));
+      const percentage = Math.max(0, Number(item?.percentage || 0));
+      return {
+        ...item,
+        amount,
+        percentage,
+        color: colors[index % colors.length]
+      };
+    })
+    .filter((item) => item.amount > 0 || item.percentage > 0);
+  const total = valid.reduce((sum, item) => sum + item.amount, 0);
+  if (!valid.length || total <= 0) {
+    return {
+      chartStyle: { background: `conic-gradient(${emptyColor} 0 100%)` },
+      segments: [],
+      total: 0
+    };
+  }
+  let cursor = 0;
+  const stops = [];
+  const segments = valid.map((item) => {
+    const pct = item.percentage > 0 ? item.percentage : ((item.amount / total) * 100);
+    const start = cursor;
+    cursor += pct;
+    stops.push(`${item.color} ${start}% ${cursor}%`);
+    return { ...item, pct };
+  });
+  return {
+    chartStyle: { background: `conic-gradient(${stops.join(', ')})` },
+    segments,
+    total
+  };
+}
+
+function donutSegmentMarkers(segments, minPct = 5) {
+  const source = Array.isArray(segments) ? segments : [];
+  let cursorPct = 0;
+  const out = [];
+  for (const segment of source) {
+    const pct = Math.max(0, Number(segment?.pct || 0));
+    const label = String(segment?.label || '').trim();
+    if (pct > 0) {
+      const midPct = cursorPct + (pct / 2);
+      const angleRad = ((midPct / 100) * Math.PI * 2) - (Math.PI / 2);
+      if (pct >= minPct && label) {
+        out.push({
+          key: label,
+          pct,
+          label,
+          x: Math.cos(angleRad),
+          y: Math.sin(angleRad)
+        });
+      }
+    }
+    cursorPct += pct;
+  }
+  return out;
+}
+
+function percentageHealth(value, mode = 'consumed') {
+  const pct = Number(value || 0);
+  if (mode === 'remaining') {
+    if (pct < 40) return { tone: 'bad', label: 'Risk', Icon: FiXCircle };
+    if (pct < 60) return { tone: 'warn', label: 'Watch', Icon: FiAlertTriangle };
+    return { tone: 'good', label: 'Normal', Icon: FiCheckCircle };
+  }
+  if (pct < 50) return { tone: 'good', label: 'Normal', Icon: FiCheckCircle };
+  if (pct < 75) return { tone: 'warn', label: 'Watch', Icon: FiAlertTriangle };
+  return { tone: 'bad', label: 'Risk', Icon: FiXCircle };
+}
+
+function PctBadge({ value, mode = 'consumed' }) {
+  const pct = Number.isFinite(Number(value)) ? Number(value) : 0;
+  const health = percentageHealth(pct, mode);
+  const Icon = health.Icon;
+  return (
+    <span className={`fin-pct-badge ${health.tone}`} title={`${pct.toFixed(1)}% - ${health.label}`}>
+      <Icon />
+      <span>{`${pct.toFixed(1)}%`}</span>
+      <small>{health.label}</small>
+    </span>
+  );
 }
 
 function pickNumber(source, keys, fallback = 0) {
@@ -168,6 +336,7 @@ function pickText(source, keys, fallback = '') {
 function projectStatusTone(status) {
   const key = String(status || '').toLowerCase();
   if (key === 'ongoing') return 'ongoing';
+  if (key === 'review') return 'review';
   if (key === 'finished') return 'finished';
   if (key === 'canceled') return 'canceled';
   if (key === 'waiting') return 'waiting';
@@ -177,10 +346,41 @@ function projectStatusTone(status) {
 function projectStatusLabel(status) {
   const key = String(status || '').toLowerCase();
   if (key === 'ongoing') return 'Ongoing';
+  if (key === 'review') return 'Review';
   if (key === 'finished') return 'Finished';
   if (key === 'canceled') return 'Canceled';
   if (key === 'waiting') return 'Waiting';
+  if (!key) return 'Unknown';
+  return key
+    .replace(/[_-]+/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function isActiveProject(project) {
+  const statusKey = String(project?.status || '').trim().toLowerCase();
+  if (project?.isActive === false) return false;
+  if (project?.deletedAt) return false;
+  if (statusKey === 'canceled') return false;
+  return true;
+}
+
+function projectCardTone(status) {
+  const key = String(status || '').toLowerCase();
+  if (key === 'waiting') return 'Waiting';
+  if (key === 'ongoing') return 'Started';
+  if (key === 'review') return 'Review';
+  if (key === 'finished') return 'Completed';
+  if (key === 'canceled') return 'Rejected';
   return 'Unknown';
+}
+
+function buildDirectionsHref(address) {
+  const raw = String(address || '').trim();
+  if (!raw) return '';
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(raw)}`;
 }
 
 function normalizeCustomerPaymentsOverview(raw) {
@@ -373,7 +573,27 @@ function normalizeProjectSummary(raw) {
     expenseTotalWithCompanyProjectRelated: pickNumber(root, ['expenseTotalWithCompanyProjectRelated'], 0)
       || pickNumber(summary, ['expenseTotalWithCompanyProjectRelated'], 0),
     netCostWithCompanyProjectRelated: pickNumber(root, ['netCostWithCompanyProjectRelated', 'netCost', 'totalCost'], 0)
-      || pickNumber(summary, ['netCostWithCompanyProjectRelated', 'netCost', 'totalCost'], 0)
+      || pickNumber(summary, ['netCostWithCompanyProjectRelated', 'netCost', 'totalCost'], 0),
+    materialPaidAmount: pickNumber(root, ['materialPaidAmount'], 0)
+      || pickNumber(summary, ['materialPaidAmount'], 0),
+    workersCount: pickNullableNumber(root, ['workersCount'])
+      ?? pickNullableNumber(project, ['workersCount'])
+      ?? pickNullableNumber(summary, ['workersCount'])
+      ?? 0,
+    projectDurationDays: pickNullableNumber(root, ['projectDurationDays', 'actualDurationDays'])
+      ?? pickNullableNumber(project, ['projectDurationDays', 'actualDurationDays'])
+      ?? pickNullableNumber(summary, ['projectDurationDays', 'actualDurationDays']),
+    actualStartAt: pickText(root, ['actualStartAt'], '')
+      || pickText(project, ['actualStartAt'], '')
+      || pickText(summary, ['actualStartAt'], ''),
+    actualEndAt: pickText(root, ['actualEndAt'], '')
+      || pickText(project, ['actualEndAt'], '')
+      || pickText(summary, ['actualEndAt'], ''),
+    projectMaterialExpenseNetAfterCustomerPayments: pickNumber(
+      root,
+      ['projectMaterialExpenseNetAfterCustomerPayments'],
+      pickNumber(summary, ['projectMaterialExpenseNetAfterCustomerPayments'], 0)
+    )
   };
 }
 
@@ -414,6 +634,80 @@ function formatCustomerPaymentTypeLabel(item) {
   if (raw === 'other') return 'Other';
   if (raw === 'unknown') return 'Unknown';
   return raw ? raw.replace(/_/g, ' ') : '-';
+}
+
+function formatExpenseTypeLabel(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '-';
+  const key = raw.toLowerCase();
+  const match = EXPENSE_TYPE_OPTIONS.find((option) => option.value === key);
+  if (match) return match.label;
+  return key
+    .replace(/[_-]+/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function createDefaultCompanyExpensesFilter() {
+  return {
+    year: new Date().getFullYear(),
+    month: '',
+    quarter: ''
+  };
+}
+
+function normalizeCompanyExpensesOverview(raw) {
+  const source = raw || {};
+  const range = source?.range || {};
+  const summary = source?.summary || {};
+  const laborBreakdown = Array.isArray(source?.laborBreakdown) ? source.laborBreakdown.map((item) => ({
+    userId: String(item?.userId || '').trim(),
+    name: String(item?.name || item?.userName || 'Unknown Worker').trim() || 'Unknown Worker',
+    amount: Number(item?.amount || 0),
+    minutesWorked: Number(item?.minutesWorked || 0),
+    hoursWorked: Number(item?.hoursWorked || 0),
+    entriesCount: Number(item?.entriesCount || 0),
+    percentage: Number(item?.percentage || 0)
+  })) : [];
+  const expenseCategoryBreakdown = Array.isArray(source?.expenseCategoryBreakdown) ? source.expenseCategoryBreakdown.map((item) => ({
+    category: String(item?.category || '').trim(),
+    label: String(item?.label || formatExpenseTypeLabel(item?.category)).trim() || formatExpenseTypeLabel(item?.category),
+    amount: Number(item?.amount || 0),
+    count: Number(item?.count || 0),
+    percentage: Number(item?.percentage || 0)
+  })) : [];
+  return {
+    range: {
+      year: Number(range?.year || new Date().getFullYear()),
+      month: range?.month ? Number(range.month) : null,
+      quarter: range?.quarter ? Number(range.quarter) : null,
+      from: range?.from || '',
+      to: range?.to || '',
+      label: String(range?.label || '').trim(),
+      timeZone: String(range?.timeZone || '').trim()
+    },
+    summary: {
+      totalLaborCost: Number(summary?.totalLaborCost || 0),
+      totalOtherCompanyExpenses: Number(summary?.totalOtherCompanyExpenses || 0),
+      totalCombinedCost: Number(summary?.totalCombinedCost || 0),
+      laborWorkersCount: Number(summary?.laborWorkersCount || laborBreakdown.length || 0),
+      expenseItemsCount: Number(summary?.expenseItemsCount || expenseCategoryBreakdown.reduce((sum, item) => sum + Number(item.count || 0), 0))
+    },
+    laborBreakdown,
+    expenseCategoryBreakdown,
+    expenseScopeBreakdown: {
+      companyGeneral: {
+        amount: Number(source?.expenseScopeBreakdown?.companyGeneral?.amount || 0),
+        count: Number(source?.expenseScopeBreakdown?.companyGeneral?.count || 0)
+      },
+      companyProjectRelated: {
+        amount: Number(source?.expenseScopeBreakdown?.companyProjectRelated?.amount || 0),
+        count: Number(source?.expenseScopeBreakdown?.companyProjectRelated?.count || 0)
+      }
+    }
+  };
 }
 
 export default function Finance() {
@@ -482,6 +776,10 @@ export default function Finance() {
   const [reportOverview, setReportOverview] = useState(null);
   const [reportOverviewLoading, setReportOverviewLoading] = useState(false);
   const [reportTab, setReportTab] = useState('finance');
+  const [companyExpensesFilter, setCompanyExpensesFilter] = useState(() => createDefaultCompanyExpensesFilter());
+  const [companyExpensesReport, setCompanyExpensesReport] = useState(null);
+  const [companyExpensesLoading, setCompanyExpensesLoading] = useState(false);
+  const [companyExpensesError, setCompanyExpensesError] = useState('');
   const [customerPaymentsReport, setCustomerPaymentsReport] = useState(null);
   const [customerPaymentsReportLoading, setCustomerPaymentsReportLoading] = useState(false);
   const [customerPaymentsProjectModalOpen, setCustomerPaymentsProjectModalOpen] = useState(false);
@@ -503,6 +801,7 @@ export default function Finance() {
     users: false,
     reportFinance: false,
     reportEarnings: false,
+    reportCompanyExpenses: false,
     earnings: false,
     payments: false,
     expenses: false,
@@ -706,7 +1005,9 @@ export default function Finance() {
     ]);
 
     const nextUsers = usersResult.status === 'fulfilled' ? (usersResult.value || []) : [];
-    const nextProjects = projectsResult.status === 'fulfilled' ? (projectsResult.value?.items || []) : [];
+    const nextProjects = projectsResult.status === 'fulfilled'
+      ? (Array.isArray(projectsResult.value?.items) ? projectsResult.value.items.filter(isActiveProject) : [])
+      : [];
 
     if (projectsResult.status === 'fulfilled') {
       setProjects(nextProjects);
@@ -751,6 +1052,29 @@ export default function Finance() {
     }
   };
 
+  const loadCompanyExpensesReport = async (filterOverride) => {
+    const filter = filterOverride || companyExpensesFilter;
+    setCompanyExpensesLoading(true);
+    setCompanyExpensesError('');
+    try {
+      const data = await companyExpensesOverview({
+        year: filter?.year || undefined,
+        month: filter?.month || undefined,
+        quarter: filter?.quarter || undefined
+      });
+      const normalized = normalizeCompanyExpensesOverview(data);
+      setCompanyExpensesReport(normalized);
+      return normalized;
+    } catch (err) {
+      const message = err?.message || 'Failed to load company expenses overview.';
+      setCompanyExpensesError(message);
+      showToast(message);
+      return null;
+    } finally {
+      setCompanyExpensesLoading(false);
+    }
+  };
+
   const loadReportProjects = async ({ reset = false } = {}) => {
     if (reportProjectsLoading && !reset) return;
     if (!reset && !reportProjectsCursor) return;
@@ -759,30 +1083,12 @@ export default function Finance() {
     try {
       const cursor = reset ? undefined : reportProjectsCursor;
       const searchText = String(reportSearch || '').trim() || undefined;
-      let data;
-      if (reportStatusFilter === 'ongoing') {
-        try {
-          data = await listOngoingProjects({
-            limit: 10,
-            cursor,
-            q: searchText
-          });
-        } catch (_ongoingErr) {
-          data = await listProjects({
-            limit: 10,
-            cursor,
-            status: 'ongoing',
-            q: searchText
-          });
-        }
-      } else {
-        data = await listProjects({
-          limit: 10,
-          cursor,
-          status: reportStatusFilter || undefined,
-          q: searchText
-        });
-      }
+      const data = await listProjects({
+        limit: 10,
+        cursor,
+        status: reportStatusFilter || undefined,
+        q: searchText
+      });
       const nextItems = Array.isArray(data?.items) ? data.items : [];
       setReportProjects((prev) => (reset ? nextItems : [...prev, ...nextItems]));
       setReportProjectsCursor(data?.nextCursor || null);
@@ -798,7 +1104,7 @@ export default function Finance() {
     if (projects.length) return projects;
     try {
       const prj = await listProjects({ limit: 100 });
-      const nextProjects = prj?.items || [];
+      const nextProjects = (Array.isArray(prj?.items) ? prj.items : []).filter(isActiveProject);
       setProjects(nextProjects);
       return nextProjects;
     } catch (err) {
@@ -821,7 +1127,7 @@ export default function Finance() {
         cursor: reset ? undefined : expenseProjectCursor,
         q: q || undefined
       });
-      const nextProjects = prj?.items || [];
+      const nextProjects = (Array.isArray(prj?.items) ? prj.items : []).filter(isActiveProject);
       const nextCursor = prj?.nextCursor || null;
       setExpenseProjectCursor(nextCursor);
       setExpenseProjectHasMore(Boolean(nextCursor));
@@ -845,7 +1151,7 @@ export default function Finance() {
           limit: 7,
           cursor: reset ? undefined : expenseProjectCursor
         });
-        const nextProjects = legacy?.items || [];
+        const nextProjects = (Array.isArray(legacy?.items) ? legacy.items : []).filter(isActiveProject);
         const nextCursor = legacy?.nextCursor || null;
         setExpenseProjectCursor(nextCursor);
         setExpenseProjectHasMore(Boolean(nextCursor));
@@ -919,6 +1225,8 @@ export default function Finance() {
       const stop = showGlobalLoader ? showGlobalLoader('Loading reports...') : () => {};
       if (reportTab === 'earnings') {
         loadCustomerPaymentsReport().finally(stop).catch(() => {});
+      } else if (reportTab === 'companyExpenses') {
+        loadCompanyExpensesReport().finally(stop).catch(() => {});
       } else {
         Promise.all([loadProjectsOverview(), loadReportProjects({ reset: true })]).finally(stop).catch(() => {});
       }
@@ -965,6 +1273,7 @@ export default function Finance() {
       loadCustomerPaymentsReport().catch(() => {});
       return;
     }
+    if (reportTab === 'companyExpenses') return;
     loadProjectsOverview().catch(() => {});
     loadReportProjects({ reset: true }).catch(() => {});
   }, [canManage, hasLoaded, financeTab, reportTab, reportStatusFilter, reportSearch, reportDateFrom, reportDateTo]);
@@ -986,6 +1295,8 @@ export default function Finance() {
     if (financeTab === 'reports') {
       if (reportTab === 'earnings') {
         loadCustomerPaymentsReport().catch(() => {});
+      } else if (reportTab === 'companyExpenses') {
+        loadCompanyExpensesReport().catch(() => {});
       } else {
         Promise.all([loadProjectsOverview(), loadReportProjects({ reset: true })]).catch(() => {});
       }
@@ -1209,6 +1520,10 @@ export default function Finance() {
     setExpenseSaving(true);
     try {
       const scope = expenseForm.scope || 'project';
+      if (isReferralType(expenseForm.type)) {
+        showToast('Referral expenses are controlled from project referral settings.');
+        return;
+      }
       if (scope === 'project' && !expenseForm.projectId) {
         showToast('Project is required for project scope expense.');
         return;
@@ -1232,7 +1547,8 @@ export default function Finance() {
       await loadExpensesData({ reset: true });
       showToast(expenseEditId ? 'Expense updated.' : 'Expense saved.');
     } catch (err) {
-      showToast(err?.message || (expenseEditId ? 'Expense update failed.' : 'Expense failed.'));
+      const message = err?.message || (expenseEditId ? 'Expense update failed.' : 'Expense failed.');
+      showToast(isReferralManagedErrorMessage(message) ? 'Referral expenses are controlled from project referral settings.' : message);
     } finally {
       setExpenseSaving(false);
     }
@@ -1354,13 +1670,18 @@ export default function Finance() {
     }
   };
 
-  const onDeleteExpense = async (id) => {
+  const onDeleteExpense = async (id, type) => {
+    if (isReferralType(type)) {
+      showToast('Referral expenses are controlled from project referral settings.');
+      return;
+    }
     setExpenseDeleteBusyId(String(id || ''));
     try {
       await deleteExpense(id);
       await loadExpensesData({ reset: true });
     } catch (err) {
-      showToast(err?.message || 'Delete expense failed.');
+      const message = err?.message || 'Delete expense failed.';
+      showToast(isReferralManagedErrorMessage(message) ? 'Referral expenses are controlled from project referral settings.' : message);
     } finally {
       setExpenseDeleteBusyId('');
     }
@@ -1389,19 +1710,53 @@ export default function Finance() {
   const ongoingLaborEarnings = Number(reportOverview?.ongoingLaborEarnings || 0);
   const totalProjectExpenses = pickNumber(reportOverview, ['totalProjectExpenses', 'totalExpenses'], 0);
   const ongoingProjectExpenses = pickNumber(reportOverview, ['ongoingProjectExpenses', 'ongoingExpenses'], 0);
+  const totalMaterialPaidByCustomers = pickNumber(reportOverview, ['totalMaterialPaidByCustomers'], 0);
+  const ongoingMaterialPaidByCustomers = pickNumber(reportOverview, ['ongoingMaterialPaidByCustomers'], 0);
+  const totalProjectMaterialExpensesNet = pickNumber(
+    reportOverview,
+    ['totalProjectMaterialExpensesNet'],
+    totalProjectExpenses - totalMaterialPaidByCustomers
+  );
+  const ongoingProjectMaterialExpensesNet = pickNumber(
+    reportOverview,
+    ['ongoingProjectMaterialExpensesNet'],
+    ongoingProjectExpenses - ongoingMaterialPaidByCustomers
+  );
   const totalCompanyProjectRelatedExpenses = pickNumber(reportOverview, ['totalCompanyProjectRelatedExpenses'], 0);
   const ongoingCompanyProjectRelatedExpenses = pickNumber(reportOverview, ['ongoingCompanyProjectRelatedExpenses'], 0);
-  const totalConsumed = totalLaborEarnings + totalCompanyProjectRelatedExpenses;
-  const ongoingConsumed = ongoingLaborEarnings + ongoingCompanyProjectRelatedExpenses;
-  const totalRemainingFromQuote = pickNumber(reportOverview, ['totalRemainingFromQuoteWithCompanyProjectRelated', 'totalRemainingFromQuote'], 0);
-  const ongoingRemainingFromQuote = pickNumber(reportOverview, ['ongoingRemainingFromQuoteWithCompanyProjectRelated', 'ongoingRemainingFromQuote'], 0);
+  const totalCompanyGeneralExpenses = pickNumber(reportOverview, ['totalCompanyGeneralExpenses'], 0);
+  const ongoingCompanyGeneralExpenses = pickNumber(
+    reportOverview,
+    ['ongoingCompanyGeneralExpenses', 'totalCompanyGeneralExpenses'],
+    totalCompanyGeneralExpenses
+  );
+  const ongoingCompanyGeneralExpensesCurrentMonth = pickNumber(
+    reportOverview,
+    ['ongoingCompanyGeneralExpensesCurrentMonth'],
+    ongoingCompanyGeneralExpenses
+  );
+  // Summary consumed/remaining must exclude project material expenses.
+  const totalConsumed = totalLaborEarnings + totalCompanyProjectRelatedExpenses + totalCompanyGeneralExpenses;
+  const ongoingConsumed = ongoingLaborEarnings + ongoingCompanyProjectRelatedExpenses + ongoingCompanyGeneralExpenses;
+  const totalRemainingFromQuote = totalQuoteAmount - totalConsumed;
+  const ongoingRemainingFromQuote = ongoingQuoteAmount - ongoingConsumed;
   const isOngoingOverview = reportOverviewScope === 'ongoing';
   const overviewQuoteAmount = isOngoingOverview ? ongoingQuoteAmount : totalQuoteAmount;
   const overviewLaborEarnings = isOngoingOverview ? ongoingLaborEarnings : totalLaborEarnings;
   const overviewProjectExpenses = isOngoingOverview ? ongoingProjectExpenses : totalProjectExpenses;
+  const overviewMaterialPaidByCustomers = isOngoingOverview ? ongoingMaterialPaidByCustomers : totalMaterialPaidByCustomers;
+  const overviewProjectMaterialExpensesNet = isOngoingOverview
+    ? ongoingProjectMaterialExpensesNet
+    : totalProjectMaterialExpensesNet;
   const overviewCompanyProjectRelatedExpenses = isOngoingOverview
     ? ongoingCompanyProjectRelatedExpenses
     : totalCompanyProjectRelatedExpenses;
+  const overviewCompanyGeneralExpenses = isOngoingOverview
+    ? ongoingCompanyGeneralExpenses
+    : totalCompanyGeneralExpenses;
+  const overviewCompanyGeneralExpensesDisplay = isOngoingOverview
+    ? ongoingCompanyGeneralExpensesCurrentMonth
+    : overviewCompanyGeneralExpenses;
   const overviewConsumed = isOngoingOverview ? ongoingConsumed : totalConsumed;
   const overviewRemainingFromQuote = isOngoingOverview ? ongoingRemainingFromQuote : totalRemainingFromQuote;
   const overviewChart = buildFinanceOverviewChart(
@@ -1409,6 +1764,7 @@ export default function Finance() {
     overviewLaborEarnings,
     overviewProjectExpenses,
     overviewCompanyProjectRelatedExpenses,
+    overviewCompanyGeneralExpenses,
     overviewRemainingFromQuote
   );
 
@@ -1433,6 +1789,11 @@ export default function Finance() {
   const projectQuoteAmount = Number(selectedProjectSummary?.projectQuoteAmount || 0);
   const projectLaborEarned = Number(selectedProjectSummary?.laborEarnings || 0);
   const projectExpenses = Number(selectedProjectSummary?.projectExpenseTotal || 0);
+  const projectMaterialPaidByCustomer = Number(selectedProjectSummary?.materialPaidAmount || 0);
+  const projectMaterialExpenseNet = Number(
+    selectedProjectSummary?.projectMaterialExpenseNetAfterCustomerPayments
+    ?? (projectExpenses - projectMaterialPaidByCustomer)
+  );
   const projectCompanyProjectRelatedExpenses = Number(selectedProjectSummary?.companyProjectRelatedExpenseTotal || 0);
   const projectConsumedTotal = projectLaborEarned + projectCompanyProjectRelatedExpenses;
   const projectLaborPct = projectQuoteAmount > 0
@@ -1444,10 +1805,15 @@ export default function Finance() {
   const projectChartSpentPct = projectQuoteAmount > 0
     ? Math.min(100, Math.max(0, (projectConsumedTotal / projectQuoteAmount) * 100))
     : 0;
+  const projectRemainingPct = Math.max(0, 100 - Math.min(100, projectLaborPct + projectCompanyProjectRelatedPct));
   const projectChartStyle = {
     background: `conic-gradient(var(--fin-chart-labor) 0 ${projectLaborPct}%, var(--fin-chart-company) ${projectLaborPct}% ${Math.min(100, projectLaborPct + projectCompanyProjectRelatedPct)}%, var(--fin-chart-remaining) ${Math.min(100, projectLaborPct + projectCompanyProjectRelatedPct)}% 100%)`
   };
   const projectStatusToneClass = projectStatusTone(selectedProjectSummary?.projectStatus);
+  const selectedProjectWorkersCount = Number(selectedProjectSummary?.workersCount || 0);
+  const selectedProjectDurationLabel = formatDurationDaysOrDash(selectedProjectSummary?.projectDurationDays);
+  const selectedProjectActualStartLabel = formatDateOrDash(selectedProjectSummary?.actualStartAt);
+  const selectedProjectActualEndLabel = formatDateOrDash(selectedProjectSummary?.actualEndAt);
   const selectedExpenseProject = [...expenseProjectOptions, ...projects]
     .find((project) => String(project?.id || '') === String(expenseForm.projectId || ''));
   const selectedCustomerPaymentProject = [...expenseProjectOptions, ...projects]
@@ -1471,6 +1837,7 @@ export default function Finance() {
   const selectedExpenseProjectLabel = expenseForm.projectId && selectedExpenseProject
     ? `[${projectStatusLabel(selectedExpenseProject?.status)}] ${projectOptionLabel(selectedExpenseProject)}`
     : (expenseForm.scope === 'company' ? 'No project (optional)' : '');
+  const expenseEditIsReferral = Boolean(expenseEditId) && isReferralType(expenseForm.type);
   const selectedCustomerPaymentProjectLabel = selectedCustomerPaymentProject
     ? `[${projectStatusLabel(selectedCustomerPaymentProject?.status)}] ${projectOptionLabel(selectedCustomerPaymentProject)}`
     : '';
@@ -1483,6 +1850,16 @@ export default function Finance() {
     chart: { paidAmount: 0, remainingAmount: 0 },
     projects: []
   };
+  const companyExpensesCurrentYear = new Date().getFullYear();
+  const companyExpensesYearOptions = Array.from({ length: 6 }, (_, index) => companyExpensesCurrentYear - index);
+  const companyExpensesData = companyExpensesReport || normalizeCompanyExpensesOverview(null);
+  const companyExpensesLaborChart = buildBreakdownChart(companyExpensesData.laborBreakdown, COMPANY_EXPENSES_LABOR_COLORS);
+  const companyExpensesCategoryChart = buildBreakdownChart(companyExpensesData.expenseCategoryBreakdown, COMPANY_EXPENSES_CATEGORY_COLORS);
+  const companyExpensesSummary = companyExpensesData.summary;
+  const companyExpensesRangeLabel = companyExpensesData.range?.label || 'Current year';
+  const companyExpensesHasLabor = companyExpensesData.laborBreakdown.some((item) => Number(item.amount || 0) > 0);
+  const companyExpensesHasCategories = companyExpensesData.expenseCategoryBreakdown.some((item) => Number(item.amount || 0) > 0);
+  const companyExpensesHasAnyData = Number(companyExpensesSummary.totalCombinedCost || 0) > 0 || companyExpensesHasLabor || companyExpensesHasCategories;
   const customerPaymentsChart = buildPaidPendingChart(
     customerPaymentsTotals?.chart?.paidAmount,
     customerPaymentsTotals?.chart?.remainingAmount
@@ -1541,14 +1918,6 @@ export default function Finance() {
             onClick={() => setFinanceTab('expenditure')}
           >
             Expenditure
-          </button>
-          <button
-            type="button"
-            className={`fin-tab${financeTab === 'users' ? ' active' : ''}`}
-            data-mode="employees"
-            onClick={() => setFinanceTab('users')}
-          >
-            Users
           </button>
         </div>
       </div>
@@ -1649,7 +2018,13 @@ export default function Finance() {
           <div className="home-card-head" style={{ marginBottom: 10 }}>
             <div>
               <div className="eyebrow">Overview</div>
-              <h3>{reportTab === 'earnings' ? 'Customer Payments Overview' : 'Project Finance Overview'}</h3>
+              <h3>{
+                reportTab === 'earnings'
+                  ? 'Customer Payments Overview'
+                  : reportTab === 'companyExpenses'
+                    ? 'Company Expenses'
+                    : 'Project Finance Overview'
+              }</h3>
             </div>
             <div className="row" style={{ gap: 8 }}>
               {reportTab === 'finance' ? (
@@ -1666,6 +2041,12 @@ export default function Finance() {
                   >
                     Detailed Information
                   </button>
+                </>
+              ) : reportTab === 'companyExpenses' ? (
+                <>
+                  <div className="pill">{companyExpensesRangeLabel}</div>
+                  <div className="pill">Workers: {companyExpensesSummary.laborWorkersCount}</div>
+                  <div className="pill">Expenses: {companyExpensesSummary.expenseItemsCount}</div>
                 </>
               ) : (
                 <>
@@ -1691,6 +2072,13 @@ export default function Finance() {
             >
               Earnings
             </button>
+            <button
+              type="button"
+              className={`fin-tab${reportTab === 'companyExpenses' ? ' active' : ''}`}
+              onClick={() => setReportTab('companyExpenses')}
+            >
+              Company Expenses
+            </button>
           </div>
 
           {reportTab === 'finance' ? (
@@ -1714,6 +2102,24 @@ export default function Finance() {
               <div className="fin-report-overview-card">
             <div className="fin-report-donut-wrap">
               <div className="fin-report-donut" style={overviewChart.chartStyle}>
+                {donutSegmentMarkers([
+                  { label: 'Labor', pct: overviewChart.laborPct },
+                  { label: 'Company', pct: overviewChart.companyProjectRelatedPct },
+                  { label: 'Owned', pct: overviewChart.companyOwnedPct },
+                  { label: 'Remain', pct: overviewChart.remainingPct }
+                ]).map((marker) => (
+                  <span
+                    key={`overview-${marker.key}`}
+                    className="fin-donut-marker"
+                    style={{
+                      left: `${50 + (marker.x * 45)}%`,
+                      top: `${50 + (marker.y * 45)}%`
+                    }}
+                    title={`${marker.label}: ${marker.pct.toFixed(1)}%`}
+                  >
+                    {marker.pct.toFixed(1)}%
+                  </span>
+                ))}
                 <div className="fin-report-donut-center">
                   <strong>{overviewChart.consumedPct.toFixed(1)}%</strong>
                   <small>Consumed</small>
@@ -1724,30 +2130,69 @@ export default function Finance() {
               <div className="fin-project-summary-group">
                 <div className="fin-project-summary-row">
                   <span className="dot labor" />
-                  <span>Labor Used</span>
+                  <span className="fin-row-label-inline">
+                    <span>Labor Used</span>
+                    <PctBadge value={overviewChart.laborPct} />
+                  </span>
                   <strong>{money(overviewLaborEarnings)}</strong>
                 </div>
                 <div className="fin-project-summary-row">
                   <span className="dot agreed" />
-                  <span>Company Expenses (Project-Related)</span>
+                  <span className="fin-row-label-inline">
+                    <span>Company Expenses (Project-Related)</span>
+                    <PctBadge value={overviewChart.companyProjectRelatedPct} />
+                  </span>
                   <strong>{money(overviewCompanyProjectRelatedExpenses)}</strong>
                 </div>
                 <div className="fin-project-summary-row">
+                  <span className="dot company-owned" />
+                  <span className="fin-row-label-with-pct">
+                    <span className="fin-row-label-inline">
+                      <span>Company-Owned Expenses (Non-Project)</span>
+                      <PctBadge value={overviewChart.companyOwnedPct} />
+                    </span>
+                    {isOngoingOverview ? <small className="muted" style={{ display: 'block' }}>Current month (America/Chicago)</small> : null}
+                  </span>
+                  <strong>{money(overviewCompanyGeneralExpensesDisplay)}</strong>
+                </div>
+                <div className="fin-project-summary-row">
                   <span className="dot remaining" />
-                  <span>Remaining Balance</span>
+                  <span className="fin-row-label-inline">
+                    <span>Remaining Balance</span>
+                    <PctBadge value={overviewChart.remainingPct} mode="remaining" />
+                  </span>
                   <strong>{money(overviewRemainingFromQuote)}</strong>
                 </div>
               </div>
               <div className="fin-project-summary-group fin-project-summary-group-extra">
+                {isOngoingOverview ? (
+                  <div className="fin-project-summary-row">
+                    <span className="row-icon consumed" aria-hidden="true"><FiDollarSign /></span>
+                    <span className="with-icon-label">Ongoing Quote Amount</span>
+                    <strong>{money(overviewQuoteAmount)}</strong>
+                  </div>
+                ) : null}
                 <div className="fin-project-summary-row">
                   <span className="row-icon consumed" aria-hidden="true"><FiTrendingUp /></span>
-                  <span className="with-icon-label">Consumed</span>
+                  <span className="with-icon-label">{isOngoingOverview ? 'Consumed (All Company Expenses)' : 'Consumed'}</span>
                   <strong>{money(overviewConsumed)}</strong>
                 </div>
-                <div className="fin-project-summary-row">
-                  <span className="dot expense" />
-                  <span>Project Material Expenses</span>
-                  <strong>{money(overviewProjectExpenses)}</strong>
+                <div className="fin-project-summary-row-group material-group">
+                  <div className="fin-project-summary-row">
+                    <span className="row-icon material" aria-hidden="true"><FiPlusCircle /></span>
+                    <span className="with-icon-label">Project Material Expenses</span>
+                    <strong>{money(overviewProjectExpenses)}</strong>
+                  </div>
+                  <div className="fin-project-summary-row">
+                    <span className="dot material-paid" />
+                    <span>Material Paid by Customer</span>
+                    <strong>{money(overviewMaterialPaidByCustomers)}</strong>
+                  </div>
+                  <div className="fin-project-summary-row">
+                    <span className="dot material-net" />
+                    <span>Net Material Expense</span>
+                    <strong>{money(overviewProjectMaterialExpensesNet)}</strong>
+                  </div>
                 </div>
                 <div className={`fin-report-health ${overviewChart.tone}`}>
                   {overviewChart.overrun > 0
@@ -1814,38 +2259,58 @@ export default function Finance() {
             </button>
               </div>
 
-              <div className="fin-tx-list" style={{ marginTop: 12 }}>
+              <div id="prjList" style={{ marginTop: 12 }}>
             {reportProjects.map((project) => (
               <div
                 key={project.id}
-                className={`fin-tx-item${selectedReportProjectId === String(project.id) ? ' active' : ''}`}
+                className={`prj-item${selectedReportProjectId === String(project.id) ? ' active' : ''}`}
+                data-status={projectCardTone(project?.status)}
               >
-                <div className="fin-tx-main">
-                  <span className="fin-tx-label">{project.description || project.address?.raw || project.id}</span>
-                  <div className="fin-earning-meta">
-                    <span className={`fin-expense-status ${projectStatusTone(project?.status)}`}>{projectStatusLabel(project?.status)}</span>
-                    <span className="fin-report-project-chip quote">{`Quote ${money(project.quoteAmount)}`}</span>
-                    <span className="fin-report-project-chip customer">
-                      {`Customer: ${
-                        String(project?.customer?.fullName || '').trim()
-                        || [project?.customer?.name, project?.customer?.surname].map((part) => String(part || '').trim()).filter(Boolean).join(' ')
-                        || '-'
-                      }`}
-                    </span>
-                    <span className="fin-report-project-chip address">
-                      {`Address: ${formatAddressText(project?.address) || '-'}`}
-                    </span>
+                <div className="prj-row1">
+                  <div className="prj-title">{project.description || project.address?.raw || project.id}</div>
+                  <div className="prj-status-inline">
+                    <span className={`pill ${projectCardTone(project?.status)}`}>{projectStatusLabel(project?.status)}</span>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  className="ghost btn-tone-info btn-with-spinner"
-                  onClick={() => openProjectSummaryModal(project.id)}
-                  disabled={reportBusy && selectedReportProjectId === String(project.id)}
-                >
-                  {reportBusy && selectedReportProjectId === String(project.id) ? <FiLoader className="btn-spinner" /> : null}
-                  <span>{reportBusy && selectedReportProjectId === String(project.id) ? 'Loading...' : 'View Summary'}</span>
-                </button>
+                <div className="prj-time">
+                  {formatAddressText(project?.address) ? (
+                    <div className="address-link">
+                      <span className="prj-time-muted address-link-text">{formatAddressText(project?.address)}</span>
+                      <a
+                        className="address-link-icon-btn"
+                        href={buildDirectionsHref(formatAddressText(project?.address))}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label={`Open directions for ${formatAddressText(project?.address)}`}
+                        title="Open directions"
+                      >
+                        <FiNavigation />
+                      </a>
+                    </div>
+                  ) : <span className="prj-time-muted">-</span>}
+                </div>
+                <div className="prj-client-block">
+                  <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                    <div className="prj-client-line" style={{ margin: 0, flex: '1 1 auto', minWidth: 0 }}>
+                      <strong>Customer:</strong>{' '}
+                      {String(project?.customer?.fullName || '').trim()
+                        || [project?.customer?.name, project?.customer?.surname].map((part) => String(part || '').trim()).filter(Boolean).join(' ')
+                        || '-'}
+                    </div>
+                    <div className="prj-amount">{money(project.quoteAmount)}</div>
+                  </div>
+                  <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className="ghost btn-tone-info btn-with-spinner"
+                      onClick={() => openProjectSummaryModal(project.id)}
+                      disabled={reportBusy && selectedReportProjectId === String(project.id)}
+                    >
+                      {reportBusy && selectedReportProjectId === String(project.id) ? <FiLoader className="btn-spinner" /> : null}
+                      <span>{reportBusy && selectedReportProjectId === String(project.id) ? 'Loading...' : 'View Summary'}</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             ))}
             {!reportProjectsLoading && !reportProjects.length ? <div className="muted">No projects found.</div> : null}
@@ -1863,11 +2328,251 @@ export default function Finance() {
                 </button>
               ) : null}
             </>
+          ) : reportTab === 'companyExpenses' ? (
+            <>
+              {renderFilterPanel('reportCompanyExpenses', (
+                <div className="prj-filter-group payments-filters-grid finance-payments-filter-grid" style={{ marginBottom: 10 }}>
+                  <label className="payments-filter-field">
+                    <span>Year</span>
+                    <select
+                      value={companyExpensesFilter.year}
+                      onChange={(e) => setCompanyExpensesFilter((prev) => ({ ...prev, year: Number(e.target.value) || companyExpensesCurrentYear }))}
+                    >
+                      {companyExpensesYearOptions.map((year) => (
+                        <option key={year} value={year}>{year}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="payments-filter-field">
+                    <span>Month</span>
+                    <select
+                      value={companyExpensesFilter.month}
+                      onChange={(e) => setCompanyExpensesFilter((prev) => ({ ...prev, month: e.target.value, quarter: '' }))}
+                      disabled={Boolean(companyExpensesFilter.quarter)}
+                    >
+                      <option value="">All months</option>
+                      <option value="1">January</option>
+                      <option value="2">February</option>
+                      <option value="3">March</option>
+                      <option value="4">April</option>
+                      <option value="5">May</option>
+                      <option value="6">June</option>
+                      <option value="7">July</option>
+                      <option value="8">August</option>
+                      <option value="9">September</option>
+                      <option value="10">October</option>
+                      <option value="11">November</option>
+                      <option value="12">December</option>
+                    </select>
+                  </label>
+                  <label className="payments-filter-field">
+                    <span>Quarter</span>
+                    <select
+                      value={companyExpensesFilter.quarter}
+                      onChange={(e) => setCompanyExpensesFilter((prev) => ({ ...prev, quarter: e.target.value, month: '' }))}
+                      disabled={Boolean(companyExpensesFilter.month)}
+                    >
+                      <option value="">All quarters</option>
+                      <option value="1">Q1</option>
+                      <option value="2">Q2</option>
+                      <option value="3">Q3</option>
+                      <option value="4">Q4</option>
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="ghost btn-tone-neutral payments-reset-btn"
+                    onClick={() => setCompanyExpensesFilter(createDefaultCompanyExpensesFilter())}
+                  >
+                    Reset
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost btn-tone-primary"
+                    onClick={() => loadCompanyExpensesReport()}
+                    disabled={companyExpensesLoading}
+                  >
+                    Apply
+                  </button>
+                </div>
+              ))}
+
+              <div className="home-stat-grid fin-report-overall-metrics fin-company-expenses-summary-grid" style={{ marginBottom: 12 }}>
+                <div className="home-metric tone-labor">
+                  <span className="home-metric-label">Total Labor</span>
+                  <span className="home-metric-value">{money(companyExpensesSummary.totalLaborCost)}</span>
+                </div>
+                <div className="home-metric tone-expense">
+                  <span className="home-metric-label">Total Other Expenses</span>
+                  <span className="home-metric-value">{money(companyExpensesSummary.totalOtherCompanyExpenses)}</span>
+                </div>
+                <div className="home-metric tone-consumed">
+                  <span className="home-metric-label">Total Combined Cost</span>
+                  <span className="home-metric-value">{money(companyExpensesSummary.totalCombinedCost)}</span>
+                </div>
+              </div>
+
+              {companyExpensesLoading ? (
+                <div className="muted">Loading company expenses...</div>
+              ) : companyExpensesError ? (
+                <div className="fin-report-health danger">{companyExpensesError}</div>
+              ) : !companyExpensesHasAnyData ? (
+                <div className="muted">No company expense data found for this range.</div>
+              ) : (
+                <>
+                  <div className="fin-company-expenses-grid">
+                    <div className="fin-report-overview-card fin-company-expenses-card">
+                      <div className="fin-report-donut-wrap">
+                        <div className="fin-report-donut" style={companyExpensesLaborChart.chartStyle}>
+                          {donutSegmentMarkers(companyExpensesLaborChart.segments.map((item) => ({ label: item.name, pct: item.pct })), 7).map((marker) => (
+                            <span
+                              key={`company-labor-${marker.key}`}
+                              className={`fin-donut-marker fin-company-donut-marker${marker.x >= 0 ? ' is-right' : ' is-left'}`}
+                              style={{
+                                left: `${50 + (marker.x * 79)}%`,
+                                top: `${50 + (marker.y * 60)}%`,
+                                '--marker-accent': companyExpensesLaborChart.segments.find((item) => item.name === marker.label)?.color || COMPANY_EXPENSES_LABOR_COLORS[0]
+                              }}
+                              title={`${marker.label}: ${marker.pct.toFixed(1)}%`}
+                            >
+                              <strong>{marker.label}</strong>
+                              <small>{marker.pct.toFixed(1)}%</small>
+                            </span>
+                          ))}
+                          <div className="fin-report-donut-center">
+                            <strong>{companyExpensesSummary.laborWorkersCount}</strong>
+                            <small>Workers</small>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="fin-report-overview-meta">
+                        <div className="fin-project-summary-group">
+                          <div className="fin-project-summary-row">
+                            <span className="dot labor" />
+                            <span>Labor by worker</span>
+                            <strong>{money(companyExpensesSummary.totalLaborCost)}</strong>
+                          </div>
+                          <div className="fin-project-summary-row">
+                            <span className="dot agreed" />
+                            <span>Entries</span>
+                            <strong>{companyExpensesData.laborBreakdown.reduce((sum, item) => sum + Number(item.entriesCount || 0), 0)}</strong>
+                          </div>
+                        </div>
+                        <div className="fin-project-summary-group fin-project-summary-group-extra">
+                          {companyExpensesHasLabor ? companyExpensesData.laborBreakdown.map((item, index) => (
+                            <div key={item.userId || `${item.name}-${index}`} className="fin-project-summary-row">
+                              <span className="dot" style={{ background: companyExpensesLaborChart.segments[index]?.color || COMPANY_EXPENSES_LABOR_COLORS[index % COMPANY_EXPENSES_LABOR_COLORS.length] }} />
+                              <span className="fin-company-expenses-list-label">
+                                <span>{item.name}</span>
+                                <small>{`${Number(item.hoursWorked || (Number(item.minutesWorked || 0) / 60)).toFixed(2)} hrs | ${item.entriesCount} entries`}</small>
+                              </span>
+                              <strong>{`${money(item.amount)} | ${Number(companyExpensesLaborChart.segments[index]?.pct || item.percentage || 0).toFixed(1)}%`}</strong>
+                            </div>
+                          )) : <div className="muted">No labor items for this range.</div>}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="fin-report-overview-card fin-company-expenses-card">
+                      <div className="fin-report-donut-wrap">
+                        <div className="fin-report-donut" style={companyExpensesCategoryChart.chartStyle}>
+                          {donutSegmentMarkers(companyExpensesCategoryChart.segments.map((item) => ({ label: item.label, pct: item.pct })), 7).map((marker) => (
+                            <span
+                              key={`company-category-${marker.key}`}
+                              className={`fin-donut-marker fin-company-donut-marker${marker.x >= 0 ? ' is-right' : ' is-left'}`}
+                              style={{
+                                left: `${50 + (marker.x * 79)}%`,
+                                top: `${50 + (marker.y * 60)}%`,
+                                '--marker-accent': companyExpensesCategoryChart.segments.find((item) => item.label === marker.label)?.color || COMPANY_EXPENSES_CATEGORY_COLORS[0]
+                              }}
+                              title={`${marker.label}: ${marker.pct.toFixed(1)}%`}
+                            >
+                              <strong>{marker.label}</strong>
+                              <small>{marker.pct.toFixed(1)}%</small>
+                            </span>
+                          ))}
+                          <div className="fin-report-donut-center">
+                            <strong>{companyExpensesData.expenseCategoryBreakdown.length}</strong>
+                            <small>Categories</small>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="fin-report-overview-meta">
+                        <div className="fin-project-summary-group">
+                          <div className="fin-project-summary-row">
+                            <span className="dot expense" />
+                            <span>Other company expenses by category</span>
+                            <strong>{money(companyExpensesSummary.totalOtherCompanyExpenses)}</strong>
+                          </div>
+                          <div className="fin-project-summary-row">
+                            <span className="dot company-owned" />
+                            <span>Expense items</span>
+                            <strong>{companyExpensesSummary.expenseItemsCount}</strong>
+                          </div>
+                        </div>
+                        <div className="fin-project-summary-group fin-project-summary-group-extra">
+                          {companyExpensesHasCategories ? companyExpensesData.expenseCategoryBreakdown.map((item, index) => (
+                            <div key={item.category || `${item.label}-${index}`} className="fin-project-summary-row">
+                              <span className="dot" style={{ background: companyExpensesCategoryChart.segments[index]?.color || COMPANY_EXPENSES_CATEGORY_COLORS[index % COMPANY_EXPENSES_CATEGORY_COLORS.length] }} />
+                              <span className="fin-company-expenses-list-label">
+                                <span>{item.label}</span>
+                                <small>{`${item.count} items`}</small>
+                              </span>
+                              <strong>{`${money(item.amount)} | ${Number(companyExpensesCategoryChart.segments[index]?.pct || item.percentage || 0).toFixed(1)}%`}</strong>
+                            </div>
+                          )) : <div className="muted">No expense categories for this range.</div>}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="fin-company-expenses-scope-grid">
+                    <div className="fin-company-expenses-scope-card">
+                      <div className="eyebrow">Expense Scope</div>
+                      <div className="fin-company-expenses-scope-row">
+                        <span>Company General</span>
+                        <strong>{money(companyExpensesData.expenseScopeBreakdown.companyGeneral.amount)}</strong>
+                        <small>{`${companyExpensesData.expenseScopeBreakdown.companyGeneral.count} items`}</small>
+                      </div>
+                      <div className="fin-company-expenses-scope-row">
+                        <span>Company Project Related</span>
+                        <strong>{money(companyExpensesData.expenseScopeBreakdown.companyProjectRelated.amount)}</strong>
+                        <small>{`${companyExpensesData.expenseScopeBreakdown.companyProjectRelated.count} items`}</small>
+                      </div>
+                    </div>
+                    <div className="fin-company-expenses-scope-card">
+                      <div className="eyebrow">Range</div>
+                      <div className="fin-company-expenses-range-copy">
+                        <strong>{companyExpensesRangeLabel}</strong>
+                        <small>{companyExpensesData.range?.timeZone || 'Time zone not provided'}</small>
+                        <small>{companyExpensesData.range?.from && companyExpensesData.range?.to ? `${companyExpensesData.range.from} to ${companyExpensesData.range.to}` : 'Range dates unavailable'}</small>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </>
           ) : (
             <>
               <div className="fin-report-overview-card">
                 <div className="fin-report-donut-wrap">
                   <div className="fin-report-donut" style={customerPaymentsChart.chartStyle}>
+                    {donutSegmentMarkers([
+                      { label: 'Paid', pct: customerPaymentsChart.paidPct },
+                      { label: 'Pending', pct: customerPaymentsChart.pendingPct }
+                    ]).map((marker) => (
+                      <span
+                        key={`cust-overview-${marker.key}`}
+                        className="fin-donut-marker"
+                        style={{
+                          left: `${50 + (marker.x * 45)}%`,
+                          top: `${50 + (marker.y * 45)}%`
+                        }}
+                        title={`${marker.label}: ${marker.pct.toFixed(1)}%`}
+                      >
+                        {marker.pct.toFixed(1)}%
+                      </span>
+                    ))}
                     <div className="fin-report-donut-center">
                       <strong>{customerPaymentsChart.paidPct.toFixed(1)}%</strong>
                       <small>Paid</small>
@@ -1878,12 +2583,12 @@ export default function Finance() {
                   <div className="fin-project-summary-group">
                     <div className="fin-project-summary-row">
                       <span className="dot paid" />
-                      <span>Paid (Main Work)</span>
+                      <span>{`Paid (Main Work) (${customerPaymentsChart.paidPct.toFixed(1)}%)`}</span>
                       <strong>{money(customerPaymentsTotals?.totalMainWorkPaidAmount ?? customerPaymentsTotals?.totalPaidAmount)}</strong>
                     </div>
                     <div className="fin-project-summary-row">
                       <span className="dot pending" />
-                      <span>Pending</span>
+                      <span>{`Pending (${customerPaymentsChart.pendingPct.toFixed(1)}%)`}</span>
                       <strong>{money(customerPaymentsTotals?.totalRemainingAmount)}</strong>
                     </div>
                     <div className="fin-project-summary-row">
@@ -1941,9 +2646,12 @@ export default function Finance() {
                 </div>
               ))}
 
-              <div className="fin-tx-list fin-report-earnings-list" style={{ marginTop: 12 }}>
+              <div className="fin-tx-list" style={{ marginTop: 12 }}>
                 {(customerPaymentsTotals?.projects || []).map((project) => (
-                  <div key={project.projectId || `${project.projectDescription}-${project.customerName}`} className="fin-tx-item fin-report-earnings-item">
+                  <div
+                    key={project.projectId || `${project.projectDescription}-${project.customerName}`}
+                    className="fin-tx-item fin-report-earning-item"
+                  >
                     <div className="fin-tx-main">
                       <span className="fin-tx-label">{project.projectDescription || project.projectId || '-'}</span>
                       <div className="fin-earning-meta">
@@ -1976,7 +2684,7 @@ export default function Finance() {
                   </div>
                 ))}
                 {!customerPaymentsReportLoading && !(customerPaymentsTotals?.projects || []).length ? (
-                  <div className="muted">No ongoing projects found.</div>
+                  <div className="muted">No projects found.</div>
                 ) : null}
               </div>
             </>
@@ -2301,10 +3009,9 @@ export default function Finance() {
                   <span>Type</span>
                   <select value={expenseFilter.type} onChange={(e) => setExpenseFilter((prev) => ({ ...prev, type: e.target.value }))}>
                     <option value="">All</option>
-                    <option value="material">Material</option>
-                    <option value="damage">Damage</option>
-                    <option value="unknown">Unknown</option>
-                    <option value="other">Other</option>
+                    {EXPENSE_TYPE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
                   </select>
                 </label>
                 <label className="payments-filter-field">
@@ -2349,9 +3056,9 @@ export default function Finance() {
                   const scopeKey = String(item?.expenseScope || item?.scope || '').toLowerCase();
                   const scopeLabel = item?.expenseScopeLabel
                     || (scopeKey === 'company' ? 'Company Based' : 'Project Based');
+                  const isReferralExpense = isReferralType(item?.type || item?.expenseCategory);
                   const categoryLabel = item?.expenseCategoryLabel
-                    || item?.expenseCategory
-                    || item?.type
+                    || formatExpenseTypeLabel(item?.expenseCategory || item?.type)
                     || '-';
                   const projectLabel = item?.project?.description || item?.projectId || '';
                   const projectAddress = formatAddressText(item?.project?.address || item?.projectAddress);
@@ -2371,12 +3078,16 @@ export default function Finance() {
                       <span className={`fin-tx-amount negative${scopeKey === 'project' ? ' fin-expense-amount-project' : ''}`}>${Number(item.amount).toFixed(2)}</span>
                       <button
                         type="button"
-                        className="ghost btn-tone-info btn-with-spinner"
-                        onClick={() => startEditExpense(item)}
-                        disabled={expenseEditBusyId === String(item.id)}
+                        className={`ghost btn-with-spinner ${isReferralExpense ? 'btn-tone-neutral' : 'btn-tone-info'}`}
+                        onClick={() => {
+                          if (isReferralExpense) return;
+                          startEditExpense(item);
+                        }}
+                        disabled={isReferralExpense || expenseEditBusyId === String(item.id)}
+                        title={isReferralExpense ? 'Referral expense is auto-managed by project referral settings.' : undefined}
                       >
                         {expenseEditBusyId === String(item.id) ? <FiLoader className="btn-spinner" /> : null}
-                        <span>{expenseEditBusyId === String(item.id) ? 'Loading...' : 'Edit'}</span>
+                        <span>{isReferralExpense ? 'Auto-managed' : (expenseEditBusyId === String(item.id) ? 'Loading...' : 'Edit')}</span>
                       </button>
                     </div>
                   );
@@ -2571,6 +3282,22 @@ export default function Finance() {
               <div className="full fin-user-summary-chart-card">
                 <div className="fin-user-summary-donut-wrap">
                   <div className="fin-user-summary-donut" style={userChartStyle}>
+                    {donutSegmentMarkers([
+                      { label: 'Paid', pct: paidPct },
+                      { label: 'Pending', pct: pendingPct }
+                    ]).map((marker) => (
+                      <span
+                        key={`user-summary-${marker.key}`}
+                        className="fin-donut-marker is-sm"
+                        style={{
+                          left: `${50 + (marker.x * 46)}%`,
+                          top: `${50 + (marker.y * 46)}%`
+                        }}
+                        title={`${marker.label}: ${marker.pct.toFixed(1)}%`}
+                      >
+                        {marker.pct.toFixed(1)}%
+                      </span>
+                    ))}
                     <div className="fin-user-summary-donut-center">
                       {userSummaryLoading ? <FiLoader className="btn-spinner" /> : <strong>{paidPct.toFixed(1)}%</strong>}
                       <small>{userSummaryLoading ? 'Loading' : 'Paid'}</small>
@@ -2580,17 +3307,17 @@ export default function Finance() {
                 <div className="fin-user-summary-chart-meta">
                   <div className="fin-user-summary-row">
                     <span className="dot earned" />
-                    <span>Earned</span>
+                    <span>Earned (100.0%)</span>
                     <strong>{money(earned)}</strong>
                   </div>
                   <div className="fin-user-summary-row">
                     <span className="dot paid" />
-                    <span>Paid</span>
+                    <span>{`Paid (${paidPct.toFixed(1)}%)`}</span>
                     <strong>{money(paid)}</strong>
                   </div>
                   <div className="fin-user-summary-row">
                     <span className="dot pending" />
-                    <span>Pending</span>
+                    <span>{`Pending (${pendingPct.toFixed(1)}%)`}</span>
                     <strong>{money(pending)}</strong>
                   </div>
                 </div>
@@ -2637,8 +3364,15 @@ export default function Finance() {
                 <div className="home-metric tone-agreed"><span className="home-metric-label">Ongoing Agreed Value</span><span className="home-metric-value">{money(ongoingQuoteAmount)}</span></div>
                 <div className="home-metric tone-labor"><span className="home-metric-label">Ongoing Labor Used</span><span className="home-metric-value">{money(ongoingLaborEarnings)}</span></div>
                 <div className="home-metric tone-expense"><span className="home-metric-label">Ongoing Project Material Expenses</span><span className="home-metric-value">{money(ongoingProjectExpenses)}</span></div>
+                <div className="home-metric"><span className="home-metric-label">Material Paid by Customer</span><span className="home-metric-value">{money(ongoingMaterialPaidByCustomers)}</span></div>
+                <div className="home-metric"><span className="home-metric-label">Net Material Expense</span><span className="home-metric-value">{money(ongoingProjectMaterialExpensesNet)}</span></div>
                 <div className="home-metric"><span className="home-metric-label">Company Expenses (Project-Related)</span><span className="home-metric-value">{money(ongoingCompanyProjectRelatedExpenses)}</span></div>
-                <div className="home-metric tone-consumed"><span className="home-metric-label">Ongoing Consumed</span><span className="home-metric-value">{money(ongoingConsumed)}</span></div>
+                <div className="home-metric">
+                  <span className="home-metric-label">Company-Owned Expenses (Non-Project)</span>
+                  <span className="home-metric-value">{money(ongoingCompanyGeneralExpensesCurrentMonth)}</span>
+                  <small className="muted">Current month (America/Chicago)</small>
+                </div>
+                <div className="home-metric tone-consumed"><span className="home-metric-label">Ongoing Consumed (All Company Expenses)</span><span className="home-metric-value">{money(ongoingConsumed)}</span></div>
                 <div className="home-metric tone-remaining"><span className="home-metric-label">Ongoing Remaining</span><span className="home-metric-value">{money(ongoingRemainingFromQuote)}</span></div>
               </div>
             </section>
@@ -2650,6 +3384,8 @@ export default function Finance() {
                 <div className="home-metric tone-agreed"><span className="home-metric-label">Agreed Value</span><span className="home-metric-value">{money(totalQuoteAmount)}</span></div>
                 <div className="home-metric tone-labor"><span className="home-metric-label">Labor Used</span><span className="home-metric-value">{money(totalLaborEarnings)}</span></div>
                 <div className="home-metric tone-expense"><span className="home-metric-label">Project Material Expenses</span><span className="home-metric-value">{money(totalProjectExpenses)}</span></div>
+                <div className="home-metric"><span className="home-metric-label">Material Paid by Customer</span><span className="home-metric-value">{money(totalMaterialPaidByCustomers)}</span></div>
+                <div className="home-metric"><span className="home-metric-label">Net Material Expense</span><span className="home-metric-value">{money(totalProjectMaterialExpensesNet)}</span></div>
                 <div className="home-metric"><span className="home-metric-label">Company Expenses (Project-Related)</span><span className="home-metric-value">{money(totalCompanyProjectRelatedExpenses)}</span></div>
                 <div className="home-metric tone-consumed"><span className="home-metric-label">Total Consumed</span><span className="home-metric-value">{money(totalConsumed)}</span></div>
                 <div className="home-metric tone-remaining"><span className="home-metric-label">Remaining From Quote</span><span className="home-metric-value">{money(totalRemainingFromQuote)}</span></div>
@@ -2672,6 +3408,23 @@ export default function Finance() {
           <div className="full fin-project-summary-chart-card">
             <div className="fin-project-summary-donut-wrap">
               <div className="fin-project-summary-donut" style={projectChartStyle}>
+                {donutSegmentMarkers([
+                  { label: 'Labor', pct: projectLaborPct },
+                  { label: 'Company', pct: projectCompanyProjectRelatedPct },
+                  { label: 'Remain', pct: projectRemainingPct }
+                ]).map((marker) => (
+                  <span
+                    key={`project-summary-${marker.key}`}
+                    className="fin-donut-marker is-sm"
+                    style={{
+                      left: `${50 + (marker.x * 46)}%`,
+                      top: `${50 + (marker.y * 46)}%`
+                    }}
+                    title={`${marker.label}: ${marker.pct.toFixed(1)}%`}
+                  >
+                    {marker.pct.toFixed(1)}%
+                  </span>
+                ))}
                 <div className="fin-project-summary-donut-center">
                   {reportBusy ? <FiLoader className="btn-spinner" /> : <strong>{projectChartSpentPct.toFixed(1)}%</strong>}
                   <small>{reportBusy ? 'Loading' : 'Spent'}</small>
@@ -2682,17 +3435,17 @@ export default function Finance() {
               <div className="fin-project-summary-group">
                 <div className="fin-project-summary-row">
                   <span className="dot labor" />
-                  <span>Labor</span>
+                  <span>{`Labor (${projectLaborPct.toFixed(1)}%)`}</span>
                   <strong>{money(projectLaborEarned)}</strong>
                 </div>
                 <div className="fin-project-summary-row">
                   <span className="dot agreed" />
-                  <span>Company Expenses (Project-Related)</span>
+                  <span>{`Company Expenses (Project-Related) (${projectCompanyProjectRelatedPct.toFixed(1)}%)`}</span>
                   <strong>{money(projectCompanyProjectRelatedExpenses)}</strong>
                 </div>
                 <div className="fin-project-summary-row">
                   <span className="dot remaining" />
-                  <span>Remaining</span>
+                  <span>{`Remaining (${projectRemainingPct.toFixed(1)}%)`}</span>
                   <strong>{money(Math.max(0, projectQuoteAmount - projectConsumedTotal))}</strong>
                 </div>
               </div>
@@ -2702,10 +3455,22 @@ export default function Finance() {
                   <span className="with-icon-label">Consumed</span>
                   <strong>{money(projectConsumedTotal)}</strong>
                 </div>
-                <div className="fin-project-summary-row">
-                  <span className="dot expense" />
-                  <span>Project Material Expenses</span>
-                  <strong>{money(projectExpenses)}</strong>
+                <div className="fin-project-summary-row-group material-group">
+                  <div className="fin-project-summary-row">
+                    <span className="row-icon material" aria-hidden="true"><FiPlusCircle /></span>
+                    <span className="with-icon-label">Project Material Expenses</span>
+                    <strong>{money(projectExpenses)}</strong>
+                  </div>
+                  <div className="fin-project-summary-row">
+                    <span className="dot material-paid" />
+                    <span>Material Paid by Customer</span>
+                    <strong>{money(projectMaterialPaidByCustomer)}</strong>
+                  </div>
+                  <div className="fin-project-summary-row">
+                    <span className="dot material-net" />
+                    <span>Net Material Expense</span>
+                    <strong>{money(projectMaterialExpenseNet)}</strong>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2729,6 +3494,12 @@ export default function Finance() {
             <div className="home-metric"><span className="home-metric-label">Labor Earned</span><span className="home-metric-value">{money(selectedProjectSummary?.laborEarnings)}</span></div>
             <div className="home-metric"><span className="home-metric-label">Project Material Expenses</span><span className="home-metric-value">{money(selectedProjectSummary?.projectExpenseTotal)}</span></div>
             <div className="home-metric"><span className="home-metric-label">Company Expenses (Project-Related)</span><span className="home-metric-value">{money(selectedProjectSummary?.companyProjectRelatedExpenseTotal)}</span></div>
+            <div className="home-metric"><span className="home-metric-label">Workers Count</span><span className="home-metric-value">{selectedProjectWorkersCount.toLocaleString()}</span></div>
+            <div className="home-metric"><span className="home-metric-label">Project Duration</span><span className="home-metric-value">{selectedProjectDurationLabel}</span></div>
+          </div>
+          <div className="full muted" style={{ fontSize: 12, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <span><strong>Actual Start:</strong> {selectedProjectActualStartLabel}</span>
+            <span><strong>Actual End:</strong> {selectedProjectActualEndLabel}</span>
           </div>
         </div>
       </SimpleModal>
@@ -2749,6 +3520,22 @@ export default function Finance() {
                   boxShadow: 'inset 0 0 0 3px rgba(34,197,94,0.22)'
                 }}
               >
+                {donutSegmentMarkers([
+                  { label: 'Paid', pct: selectedCustomerProjectPaidChart.paidPct },
+                  { label: 'Pending', pct: selectedCustomerProjectPaidChart.pendingPct }
+                ]).map((marker) => (
+                  <span
+                    key={`customer-project-${marker.key}`}
+                    className="fin-donut-marker is-sm"
+                    style={{
+                      left: `${50 + (marker.x * 46)}%`,
+                      top: `${50 + (marker.y * 46)}%`
+                    }}
+                    title={`${marker.label}: ${marker.pct.toFixed(1)}%`}
+                  >
+                    {marker.pct.toFixed(1)}%
+                  </span>
+                ))}
                 <div className="fin-project-summary-donut-center">
                   <strong>{selectedCustomerProjectPaidChart.paidPct.toFixed(1)}%</strong>
                   <small>Paid</small>
@@ -2759,12 +3546,12 @@ export default function Finance() {
                 <div className="fin-project-summary-group">
                   <div className="fin-project-summary-row">
                     <span className="dot paid" />
-                    <span>Paid (Main Work)</span>
+                    <span>{`Paid (Main Work) (${selectedCustomerProjectPaidChart.paidPct.toFixed(1)}%)`}</span>
                     <strong>{money(selectedCustomerPaymentsProject?.mainWorkPaidAmount ?? selectedCustomerPaymentsProject?.paidAmount)}</strong>
                   </div>
                   <div className="fin-project-summary-row">
                     <span className="dot pending" />
-                    <span>Pending</span>
+                    <span>{`Pending (${selectedCustomerProjectPaidChart.pendingPct.toFixed(1)}%)`}</span>
                     <strong>{money(selectedCustomerPaymentsProject?.remainingAmount)}</strong>
                   </div>
                   <div className="fin-project-summary-row">
@@ -2905,7 +3692,20 @@ export default function Finance() {
         size="sm"
       >
         <div className="modal-form-grid">
-          <select value={expenseForm.scope} onChange={(e) => setExpenseForm({ ...expenseForm, scope: e.target.value })}>
+          {expenseEditIsReferral ? (
+            <div
+              className="full"
+              style={{
+                border: '1px solid var(--glass-5)',
+                borderRadius: 12,
+                padding: '10px 12px',
+                background: 'var(--card)'
+              }}
+            >
+              Referral expense is auto-managed by project referral settings.
+            </div>
+          ) : null}
+          <select value={expenseForm.scope} onChange={(e) => setExpenseForm({ ...expenseForm, scope: e.target.value })} disabled={expenseEditIsReferral}>
             <option value="project">project</option>
             <option value="company">company</option>
           </select>
@@ -2930,6 +3730,7 @@ export default function Finance() {
               setExpenseProjectPickerOpen(true);
               setExpenseProjectSearch(e.target.value);
             }}
+            disabled={expenseEditIsReferral}
           />
           {expenseProjectPickerOpen ? (
           <div
@@ -2951,6 +3752,7 @@ export default function Finance() {
                   setExpenseProjectSearch('');
                   setExpenseProjectPickerOpen(false);
                 }}
+                disabled={expenseEditIsReferral}
               >
                 <span className="fin-expense-status none">NONE</span>
                 <span className="fin-expense-project-label">No project (optional)</span>
@@ -2967,6 +3769,7 @@ export default function Finance() {
                   setExpenseProjectSearch(projectOptionLabel(project));
                   setExpenseProjectPickerOpen(false);
                 }}
+                disabled={expenseEditIsReferral}
               >
                 <span className={`fin-expense-status ${projectStatusTone(project?.status)}`}>{projectStatusLabel(project?.status)}</span>
                 <span className="fin-expense-project-label">{projectOptionLabel(project)}</span>
@@ -2994,28 +3797,31 @@ export default function Finance() {
               type="button"
               className="ghost btn-tone-neutral"
               onClick={() => loadExpenseProjectOptions({ reset: false })}
-              disabled={expenseProjectLoadMoreBusy}
+              disabled={expenseProjectLoadMoreBusy || expenseEditIsReferral}
             >
               {expenseProjectLoadMoreBusy ? 'Loading...' : 'Load more projects'}
             </button>
           ) : null}
-          <select value={expenseForm.type} onChange={(e) => setExpenseForm({ ...expenseForm, type: e.target.value })}>
-            <option value="material">material</option>
-            <option value="damage">damage</option>
-            <option value="unknown">unknown</option>
-            <option value="other">other</option>
-          </select>
-          <input placeholder="amount" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })} />
-          <input type="datetime-local" placeholder="Spent at (date & time)" value={expenseForm.spentAt || ''} onChange={(e) => setExpenseForm({ ...expenseForm, spentAt: e.target.value })} />
-          <input className="full" placeholder="notes" value={expenseForm.notes} onChange={(e) => setExpenseForm({ ...expenseForm, notes: e.target.value })} />
-          {expenseEditId && canDelete ? (
+          {expenseEditIsReferral ? (
+            <input value={formatExpenseTypeLabel(expenseForm.type)} disabled />
+          ) : (
+            <select value={expenseForm.type} onChange={(e) => setExpenseForm({ ...expenseForm, type: e.target.value })}>
+              {EXPENSE_MUTABLE_TYPE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          )}
+          <input placeholder="amount" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })} disabled={expenseEditIsReferral} />
+          <input type="datetime-local" placeholder="Spent at (date & time)" value={expenseForm.spentAt || ''} onChange={(e) => setExpenseForm({ ...expenseForm, spentAt: e.target.value })} disabled={expenseEditIsReferral} />
+          <input className="full" placeholder="notes" value={expenseForm.notes} onChange={(e) => setExpenseForm({ ...expenseForm, notes: e.target.value })} disabled={expenseEditIsReferral} />
+          {expenseEditId && canDelete && !expenseEditIsReferral ? (
             <div className="full row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
               <span className="muted">Delete is soft delete.</span>
               <button
                 type="button"
                 className="ghost btn-tone-danger btn-with-spinner"
                 onClick={async () => {
-                  await onDeleteExpense(expenseEditId);
+                  await onDeleteExpense(expenseEditId, expenseForm.type);
                   setExpenseModalOpen(false);
                   setExpenseEditId('');
                   setExpenseForm({ scope: 'project', projectId: '', type: 'material', amount: '', notes: '', spentAt: '' });
@@ -3027,9 +3833,10 @@ export default function Finance() {
               </button>
             </div>
           ) : null}
+          {expenseEditIsReferral ? <div className="full muted">Delete is disabled for referral expenses.</div> : null}
           <div className="full row" style={{ justifyContent: 'flex-end' }}>
             <button type="button" className="ghost" onClick={() => setExpenseModalOpen(false)}>Cancel</button>
-            <button type="button" onClick={saveExpense} disabled={expenseSaving} className="btn-with-spinner">
+            <button type="button" onClick={saveExpense} disabled={expenseSaving || expenseEditIsReferral} className="btn-with-spinner">
               {expenseSaving ? <FiLoader className="btn-spinner" /> : null}
               <span>{expenseSaving ? (expenseEditId ? 'Updating...' : 'Saving...') : (expenseEditId ? 'Update' : 'Save')}</span>
             </button>

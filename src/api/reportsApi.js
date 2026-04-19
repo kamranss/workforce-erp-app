@@ -31,3 +31,7 @@ export function userLiability(query) {
 export function customerPaymentsOverview(query) {
   return request('/api/reports/customer-payments-overview', { query });
 }
+
+export function companyExpensesOverview(query) {
+  return request('/api/reports/company-expenses-overview', { query });
+}

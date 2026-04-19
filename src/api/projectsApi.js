@@ -12,8 +12,12 @@ export function projectStatusCounts() {
   return request('/api/projects/status-counts');
 }
 
-export function listOngoingProjects(query) {
+export function listCheckInEligibleProjects(query) {
   return request('/api/projects/ongoing', { query });
+}
+
+export function listOngoingProjects(query) {
+  return listCheckInEligibleProjects(query);
 }
 
 export function listActiveProjects(query) {

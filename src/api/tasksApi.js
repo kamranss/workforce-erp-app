@@ -21,5 +21,13 @@ export function deleteTask(id) {
 }
 
 export function myTasks(query, options = {}) {
-  return request('/api/dashboard/my-tasks', { query, ...options });
+  return request('/api/tasks/my-assigned', { query, ...options });
+}
+
+export function updateMyAssignedTaskStatus(id, body) {
+  return request('/api/tasks/my-assigned-status', { method: 'PATCH', query: { id }, body });
+}
+
+export function toggleTaskTodo(id, body) {
+  return request('/api/tasks/todo-toggle', { method: 'POST', query: { id }, body });
 }

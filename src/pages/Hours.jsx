@@ -157,16 +157,37 @@ function entryMinutes(row) {
   return toNumber(row?.minutesWorked ?? row?.workedMinutes ?? row?.minutes, 0);
 }
 
+function entryRawMinutes(row) {
+  return toNumber(row?.rawMinutes, entryMinutes(row));
+}
+
+function entryBreakMinutes(row) {
+  return toNumber(row?.breakMinutes, 0);
+}
+
+function formatMinutesHm(value) {
+  const total = Math.max(0, Math.round(toNumber(value, 0)));
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  if (!h) return `${m}m`;
+  if (!m) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
 function entryEarned(row) {
   return toNumber(row?.earnedAmount ?? row?.earned ?? row?.amount, 0);
 }
 
-function entryHours(row) {
-  return entryMinutes(row) / 60;
-}
-
 function isEditedEntry(entry) {
   return entry?.edited === true;
+}
+
+function isActiveProject(project) {
+  const statusKey = String(project?.status || '').trim().toLowerCase();
+  if (project?.isActive === false) return false;
+  if (project?.deletedAt) return false;
+  if (statusKey === 'canceled') return false;
+  return true;
 }
 
 function resolveSummary(payload, items = []) {
@@ -209,6 +230,7 @@ export default function Hours() {
   const { role } = useAuth();
 
   const [items, setItems] = useState([]);
+  const [expandedDays, setExpandedDays] = useState({});
   const [summary, setSummary] = useState({ totalHours: 0, totalEarned: 0, totalEntries: 0, totalMinutes: 0 });
   const [rangeInfo, setRangeInfo] = useState({ label: '-' });
   const [cursor, setCursor] = useState(null);
@@ -301,6 +323,13 @@ export default function Hours() {
     ? (selectedManualProject.description || selectedManualProject.address?.raw || selectedManualProject.id || '')
     : '';
 
+  const toggleDayGroup = (dayKey) => {
+    setExpandedDays((prev) => ({
+      ...prev,
+      [dayKey]: !prev[dayKey]
+    }));
+  };
+
   const loadUsers = async () => {
     if (!isAdmin || !getStoredToken()) return;
     try {
@@ -318,7 +347,7 @@ export default function Hours() {
     try {
       const res = await listProjects({ limit: 100 });
       const rows = Array.isArray(res?.items) ? res.items : [];
-      setProjectOptions(rows);
+      setProjectOptions(rows.filter(isActiveProject));
     } catch (err) {
       showToast(err?.message || 'Failed to load projects.');
     }
@@ -634,18 +663,33 @@ export default function Hours() {
         {error ? <div className="muted">{error}</div> : null}
 
         <div className="hours-list">
-          {groupedItems.map((group) => (
-            <div key={group.dayKey} className="day-group">
-              <div className="day-header" style={{ cursor: 'default' }}>
-                <div className="day-title">{group.dayLabel}</div>
-                <div className="muted">{group.count} entries | {(group.totalMinutes / 60).toFixed(2)} hrs</div>
-              </div>
+          {groupedItems.map((group) => {
+            const isExpanded = Boolean(expandedDays[group.dayKey]);
+            return (
+            <div key={group.dayKey} className={`day-group ${isExpanded ? 'expanded' : 'collapsed'}`}>
+              <button
+                type="button"
+                className="day-header"
+                aria-expanded={isExpanded}
+                onClick={() => toggleDayGroup(group.dayKey)}
+              >
+                <div className="day-header-copy">
+                  <div className="day-title">{group.dayLabel}</div>
+                  <div className="muted">{group.count} entries | {(group.totalMinutes / 60).toFixed(2)} hrs</div>
+                </div>
+                <span className="day-chevron" aria-hidden="true">
+                  <FiChevronDown />
+                </span>
+              </button>
               <div className="day-body">
                 {group.items.map((entry) => {
                   const userLabel = resolveUserLabel(entry) || '-';
                   const projectLabel = resolveProjectLabel(entry);
                   const edited = isEditedEntry(entry);
                   const editedTooltip = 'Edited';
+                  const rawMinutes = entryRawMinutes(entry);
+                  const breakMinutes = entryBreakMinutes(entry);
+                  const workedMinutes = entryMinutes(entry);
                   return (
                     <div key={entry.id} className={`hours-card time-card hours-card-compact${edited ? ' is-edited' : ''}`}>
                     <div className="hours-card-head">
@@ -671,12 +715,22 @@ export default function Hours() {
                       </div>
                       <div className="hours-entry-row two">
                         <div className="hours-chip">
-                          <span>Total Time</span>
-                          <strong>{entryHours(entry).toFixed(2)} h</strong>
+                          <span>Worked Time</span>
+                          <strong style={{ color: 'var(--accent)' }}>{formatMinutesHm(workedMinutes)}</strong>
                         </div>
                         <div className="hours-chip">
                           <span>Earned</span>
                           <strong>${entryEarned(entry).toFixed(2)}</strong>
+                        </div>
+                      </div>
+                      <div className="hours-entry-row two">
+                        <div className="hours-chip">
+                          <span>Total Time with Break</span>
+                          <strong>{formatMinutesHm(rawMinutes)}</strong>
+                        </div>
+                        <div className="hours-chip">
+                          <span>Break Deducted</span>
+                          <strong>{formatMinutesHm(breakMinutes)}</strong>
                         </div>
                       </div>
                       {isAdmin ? (
@@ -707,7 +761,7 @@ export default function Hours() {
                 })}
               </div>
             </div>
-          ))}
+          )})}
         </div>
 
         {!items.length && !loading ? <div className="muted">No hours found for selected filters.</div> : null}
@@ -835,6 +889,18 @@ export default function Hours() {
       <SimpleModal open={viewModalOpen} onClose={() => setViewModalOpen(false)} title="Time Entry Details" size="md">
         <div className="modal-form-grid hours-view-grid">
           <div className="full muted">Entry ID: {viewEntry?.id || '-'}</div>
+          <div className="hours-chip">
+            <span>Total Time with Break</span>
+            <strong>{formatMinutesHm(entryRawMinutes(viewEntry))}</strong>
+          </div>
+          <div className="hours-chip">
+            <span>Break Deducted</span>
+            <strong>{formatMinutesHm(entryBreakMinutes(viewEntry))}</strong>
+          </div>
+          <div className="hours-chip">
+            <span>Worked Time</span>
+            <strong style={{ color: 'var(--accent)' }}>{formatMinutesHm(entryMinutes(viewEntry))}</strong>
+          </div>
           <div className="hours-chip">
             <span>Clock In</span>
             <strong>{viewEntry?.clockInAt ? new Date(viewEntry.clockInAt).toLocaleString() : '-'}</strong>

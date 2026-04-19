@@ -1,8 +1,9 @@
 
-import { useEffect, useRef, useState } from 'react';
-import { FiEdit2, FiLoader, FiMessageCircle, FiNavigation, FiPhone, FiPlusCircle } from 'react-icons/fi';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { FiCheckCircle, FiChevronDown, FiClock, FiEdit2, FiLoader, FiMessageCircle, FiNavigation, FiPhone, FiPlusCircle, FiSlash, FiTrendingUp } from 'react-icons/fi';
 import { createCustomer, listCustomers, searchCustomersForProjectPicker, updateCustomer } from '../api/customersApi.js';
-import { createProject, deleteProject, listProjects, projectStatusCounts, updateProject } from '../api/projectsApi.js';
+import { createProject, listProjects, projectStatusCounts, updateProject } from '../api/projectsApi.js';
+import { projectSummary } from '../api/reportsApi.js';
 import SimpleModal from '../components/SimpleModal.jsx';
 import { useAuth } from '../context/AuthProvider.jsx';
 import { useUI } from '../context/UIProvider.jsx';
@@ -12,13 +13,15 @@ const EMPTY_PROJECT_FORM = {
   addressRaw: '',
   estimatedStartAt: '',
   quoteAmount: '',
+  referralEnabled: false,
+  referralPercent: '',
   customerId: '',
   materials: '',
   advancedOpen: false,
   locationKey: '',
   geoLat: '',
   geoLng: '',
-  geoRadiusMeters: '500'
+  geoRadiusMeters: '1000'
 };
 
 const EMPTY_CUSTOMER_FORM = {
@@ -28,20 +31,87 @@ const EMPTY_CUSTOMER_FORM = {
   phone: ''
 };
 
-const STATUS_OPTIONS = [
+const PROJECT_FILTER_OPTIONS = [
   { value: '', label: 'All' },
+  { value: 'created', label: 'Waiting' },
+  { value: 'progress', label: 'Progress' },
+  { value: 'review', label: 'Review' },
+  { value: 'done', label: 'Done' },
+  { value: 'deactive', label: 'Deactive' }
+];
+
+const PROJECT_STATUS_UPDATE_OPTIONS = [
   { value: 'waiting', label: 'Waiting' },
   { value: 'ongoing', label: 'Ongoing' },
+  { value: 'review', label: 'Review' },
   { value: 'finished', label: 'Finished' },
   { value: 'canceled', label: 'Canceled' }
 ];
 
+const STATUS_ORDER = ['waiting', 'ongoing', 'review', 'finished', 'canceled'];
+
+function normalizeStatusKey(status) {
+  return String(status || '').trim().toLowerCase();
+}
+
 function toStatusLabel(status) {
   const key = String(status || '').toLowerCase();
+  if (key === 'ongoing') return 'Ongoing';
+  if (key === 'review') return 'Review';
+  if (key === 'finished') return 'Finished';
+  if (key === 'canceled') return 'Canceled';
+  if (key === 'waiting') return 'Waiting';
+  if (!key) return 'Unknown';
+  return key
+    .replace(/[_-]+/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function toStatusTone(status) {
+  const key = normalizeStatusKey(status);
+  if (key === 'waiting') return 'Waiting';
   if (key === 'ongoing') return 'Started';
+  if (key === 'review') return 'Review';
   if (key === 'finished') return 'Completed';
   if (key === 'canceled') return 'Rejected';
-  return 'Waiting';
+  return 'Unknown';
+}
+
+function statusMetricClass(status) {
+  const key = normalizeStatusKey(status);
+  if (key === 'waiting') return 'projects-waiting-metric';
+  if (key === 'ongoing') return 'projects-ongoing-metric';
+  if (key === 'review') return 'projects-review-metric';
+  if (key === 'finished') return 'projects-finished-metric';
+  if (key === 'canceled') return 'projects-canceled-metric';
+  return '';
+}
+
+function isProjectDeactive(project) {
+  const statusKey = normalizeStatusKey(project?.status);
+  if (project?.isActive === false) return true;
+  if (project?.deletedAt) return true;
+  if (statusKey === 'canceled') return true;
+  return false;
+}
+
+function projectFilterBucket(project) {
+  if (isProjectDeactive(project)) return 'deactive';
+  const statusKey = normalizeStatusKey(project?.status);
+  if (statusKey === 'waiting') return 'created';
+  if (statusKey === 'ongoing') return 'progress';
+  if (statusKey === 'review') return 'review';
+  if (statusKey === 'finished') return 'done';
+  return 'created';
+}
+
+function matchesProjectFilter(project, filterStatus) {
+  const key = String(filterStatus || '').trim().toLowerCase();
+  if (!key) return !isProjectDeactive(project);
+  return projectFilterBucket(project) === key;
 }
 
 function buildDirectionsHref(address) {
@@ -54,6 +124,165 @@ function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
 }
 
+function money(value) {
+  return `$${Number(value || 0).toFixed(2)}`;
+}
+
+function moneyOrDash(value) {
+  if (value === null || value === undefined || value === '') return '--';
+  const amount = Number(value);
+  if (Number.isNaN(amount)) return '--';
+  return money(amount);
+}
+
+function hoursFromMinutes(minutes) {
+  return (Number(minutes || 0) / 60).toFixed(2);
+}
+
+function formatDateOrDash(value) {
+  if (!value) return '--';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '--';
+  return date.toLocaleDateString();
+}
+
+function formatDurationDaysOrDash(value) {
+  if (value === null || value === undefined || value === '') return '--';
+  const days = Number(value);
+  if (Number.isNaN(days) || days < 0) return '--';
+  return `${days.toFixed(2)} days`;
+}
+
+function round2(value) {
+  return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+}
+
+function normalizeNumberOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isNaN(number) ? null : number;
+}
+
+function projectFinanceBreakdown(project) {
+  const quote = normalizeNumberOrNull(project?.quoteAmount);
+  if (quote === null) {
+    return {
+      quote: null,
+      referralAmount: null,
+      netQuoteAfterReferral: null,
+      usedFallback: false
+    };
+  }
+
+  const referralAmountFromApi = normalizeNumberOrNull(project?.referralAmount);
+  const netAfterReferralFromApi = normalizeNumberOrNull(project?.netQuoteAfterReferral);
+  if (referralAmountFromApi !== null && netAfterReferralFromApi !== null) {
+    return {
+      quote,
+      referralAmount: referralAmountFromApi,
+      netQuoteAfterReferral: netAfterReferralFromApi,
+      usedFallback: false
+    };
+  }
+
+  const referralPercent = normalizeNumberOrNull(project?.referralPercent) ?? 0;
+  const referralAmount = round2(quote * (referralPercent / 100));
+  const netQuoteAfterReferral = round2(quote - referralAmount);
+  return {
+    quote,
+    referralAmount,
+    netQuoteAfterReferral,
+    usedFallback: true
+  };
+}
+
+function pickNumber(source, keys, fallback = 0) {
+  for (const key of keys) {
+    const value = source?.[key];
+    if (value === undefined || value === null || value === '') continue;
+    const parsed = Number(value);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function pickText(source, keys, fallback = '') {
+  for (const key of keys) {
+    const value = source?.[key];
+    if (value === undefined || value === null) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return fallback;
+}
+
+function normalizeProjectSummary(raw) {
+  const root = raw || {};
+  const summary = root.summary || root.totals || {};
+  const project = root.project || root.projectInfo || {};
+
+  return {
+    projectDescription: pickText(root, ['projectDescription'], '')
+      || pickText(project, ['description', 'name'], '')
+      || pickText(root, ['description'], ''),
+    projectStatus: pickText(root, ['projectStatus', 'status'], '')
+      || pickText(project, ['status'], ''),
+    projectQuoteAmount: pickNumber(root, ['projectQuoteAmount', 'quoteAmount'], 0)
+      || pickNumber(project, ['quoteAmount'], 0)
+      || pickNumber(summary, ['projectQuoteAmount', 'quoteAmount'], 0),
+    laborMinutes: pickNumber(root, ['laborMinutes', 'totalLaborMinutes'], 0)
+      || pickNumber(summary, ['laborMinutes', 'totalLaborMinutes'], 0),
+    laborEarnings: pickNumber(root, ['laborEarnings', 'totalLaborEarnings'], 0)
+      || pickNumber(summary, ['laborEarnings', 'totalLaborEarnings'], 0),
+    projectExpenseTotal: pickNumber(root, ['projectExpenseTotal', 'expenseTotal', 'totalExpenses'], 0)
+      || pickNumber(summary, ['projectExpenseTotal', 'expenseTotal', 'totalExpenses'], 0),
+    companyProjectRelatedExpenseTotal: pickNumber(root, ['companyProjectRelatedExpenseTotal'], 0)
+      || pickNumber(summary, ['companyProjectRelatedExpenseTotal'], 0),
+    materialPaidAmount: pickNumber(root, ['materialPaidAmount'], 0)
+      || pickNumber(summary, ['materialPaidAmount'], 0),
+    projectMaterialExpenseNetAfterCustomerPayments: pickNumber(
+      root,
+      ['projectMaterialExpenseNetAfterCustomerPayments'],
+      pickNumber(summary, ['projectMaterialExpenseNetAfterCustomerPayments'], 0)
+    )
+  };
+}
+
+function donutSegmentMarkers(segments, minPct = 5) {
+  const source = Array.isArray(segments) ? segments : [];
+  let cursorPct = 0;
+  const out = [];
+  for (const segment of source) {
+    const pct = Math.max(0, Number(segment?.pct || 0));
+    const label = String(segment?.label || '').trim();
+    if (pct > 0) {
+      const midPct = cursorPct + (pct / 2);
+      const angleRad = ((midPct / 100) * Math.PI * 2) - (Math.PI / 2);
+      if (pct >= minPct && label) {
+        out.push({
+          key: label,
+          pct,
+          label,
+          x: Math.cos(angleRad),
+          y: Math.sin(angleRad)
+        });
+      }
+    }
+    cursorPct += pct;
+  }
+  return out;
+}
+
+function projectStatusTone(status) {
+  const key = String(status || '').toLowerCase();
+  if (key === 'ongoing') return 'ongoing';
+  if (key === 'review') return 'review';
+  if (key === 'finished') return 'finished';
+  if (key === 'canceled') return 'canceled';
+  if (key === 'waiting') return 'waiting';
+  return 'unknown';
+}
+
 export default function Projects() {
   const { activeTab, showToast, refreshTick, showGlobalLoader } = useUI();
   const { role } = useAuth();
@@ -63,10 +292,17 @@ export default function Projects() {
   const [projects, setProjects] = useState([]);
   const [projectsCursor, setProjectsCursor] = useState(null);
   const [projectsLoading, setProjectsLoading] = useState(false);
-  const [counts, setCounts] = useState({ waiting: 0, ongoing: 0 });
+  const [counts, setCounts] = useState({
+    waiting: 0,
+    ongoing: 0,
+    review: 0,
+    finished: 0,
+    canceled: 0
+  });
   const [filterStatus, setFilterStatus] = useState('');
   const [filterCustomerId, setFilterCustomerId] = useState('');
   const [query, setQuery] = useState('');
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const [customers, setCustomers] = useState([]);
   const [customersCursor, setCustomersCursor] = useState(null);
@@ -83,8 +319,10 @@ export default function Projects() {
   const [projectCustomerLoading, setProjectCustomerLoading] = useState(false);
   const [projectCustomerLoadMoreBusy, setProjectCustomerLoadMoreBusy] = useState(false);
   const [editProjectId, setEditProjectId] = useState('');
+  const [editProjectIsActive, setEditProjectIsActive] = useState(true);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [projectSaving, setProjectSaving] = useState(false);
+  const [projectDeleteBusy, setProjectDeleteBusy] = useState(false);
 
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
   const [customerSaving, setCustomerSaving] = useState(false);
@@ -95,6 +333,10 @@ export default function Projects() {
   const [statusSaving, setStatusSaving] = useState(false);
   const [statusTargetProject, setStatusTargetProject] = useState(null);
   const [statusValue, setStatusValue] = useState('waiting');
+  const [projectSummaryModalOpen, setProjectSummaryModalOpen] = useState(false);
+  const [projectSummaryLoading, setProjectSummaryLoading] = useState(false);
+  const [projectSummaryBusyId, setProjectSummaryBusyId] = useState('');
+  const [selectedProjectSummary, setSelectedProjectSummary] = useState(null);
 
   const [addressSuggestions, setAddressSuggestions] = useState([]);
   const [addressLoading, setAddressLoading] = useState(false);
@@ -215,7 +457,6 @@ export default function Projects() {
       const data = await listProjects({
         limit: 10,
         cursor: reset ? undefined : projectsCursor,
-        status: filterStatus || undefined,
         customerId: filterCustomerId || undefined,
         q: String(query || '').trim() || undefined
       });
@@ -235,10 +476,17 @@ export default function Projects() {
     countsRequestLockRef.current = true;
     try {
       const data = await projectStatusCounts();
-      setCounts({
-        waiting: Number(data?.waiting || 0),
-        ongoing: Number(data?.ongoing || 0)
-      });
+      const nextCounts = STATUS_ORDER.reduce((acc, key) => {
+        acc[key] = Number(data?.[key] || 0);
+        return acc;
+      }, {});
+      const keys = Object.keys(data || {});
+      for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(nextCounts, key)) continue;
+        const value = Number(data?.[key]);
+        if (!Number.isNaN(value)) nextCounts[key] = value;
+      }
+      setCounts(nextCounts);
     } catch (err) {
       showToast(err?.message || 'Failed to load project counts.');
     } finally {
@@ -385,6 +633,7 @@ export default function Projects() {
 
   const openNewProjectModal = () => {
     setEditProjectId('');
+    setEditProjectIsActive(true);
     setProjectForm(EMPTY_PROJECT_FORM);
     setProjectFormError('');
     setProjectCustomerSearch('');
@@ -396,18 +645,24 @@ export default function Projects() {
   };
 
   const startEditProject = (project) => {
+    const rawReferralPercent = project?.referralPercent;
+    const hasReferralPercent = rawReferralPercent !== null && rawReferralPercent !== undefined && rawReferralPercent !== '';
+    const referralPercent = hasReferralPercent ? Number(rawReferralPercent) : NaN;
     setEditProjectId(project.id);
+    setEditProjectIsActive(project?.isActive !== false);
     setProjectForm({
       description: project.description || '',
       addressRaw: project.address?.raw || '',
       estimatedStartAt: project.estimatedStartAt ? String(project.estimatedStartAt).slice(0, 10) : '',
       quoteAmount: project.quoteAmount ?? '',
+      referralEnabled: hasReferralPercent && !Number.isNaN(referralPercent) && referralPercent > 0,
+      referralPercent: hasReferralPercent && !Number.isNaN(referralPercent) ? String(referralPercent) : '',
       customerId: project.customer?.id || project.customerId || '',
       materials: project.materials || '',
       locationKey: project.locationKey || '',
       geoLat: project.geo?.lat ?? '',
       geoLng: project.geo?.lng ?? '',
-      geoRadiusMeters: project.geoRadiusMeters ?? 500,
+      geoRadiusMeters: project.geoRadiusMeters ?? 1000,
       advancedOpen: false
     });
     setProjectFormError('');
@@ -424,6 +679,7 @@ export default function Projects() {
     const description = String(projectForm.description || '').trim();
     const addressRaw = String(projectForm.addressRaw || '').trim();
     const quoteAmount = projectForm.quoteAmount === '' ? undefined : Number(projectForm.quoteAmount);
+    const referralPercent = projectForm.referralEnabled ? Number(projectForm.referralPercent) : null;
     const materials = String(projectForm.materials || '').trim();
 
     setProjectFormError('');
@@ -440,12 +696,17 @@ export default function Projects() {
       setProjectFormError('Quote amount must be greater than or equal to 0.');
       return;
     }
+    if (projectForm.referralEnabled && (projectForm.referralPercent === '' || Number.isNaN(referralPercent) || referralPercent < 0 || referralPercent > 100)) {
+      setProjectFormError('Referral percent must be a number between 0 and 100.');
+      return;
+    }
 
     const body = {
       description,
       address: { raw: addressRaw },
       estimatedStartAt: projectForm.estimatedStartAt ? new Date(projectForm.estimatedStartAt).toISOString() : undefined,
       quoteAmount,
+      referralPercent: projectForm.referralEnabled ? referralPercent : null,
       customerId: projectForm.customerId || (editProjectId ? null : undefined),
       materials: materials || (editProjectId ? null : undefined)
     };
@@ -479,15 +740,26 @@ export default function Projects() {
     }
   };
 
-  const onDeleteProject = async (id) => {
+  const onToggleProjectActive = async (id, { fromModal = false } = {}) => {
     if (!canDelete) return;
-    if (!confirm('Soft delete this project?')) return;
+    if (projectDeleteBusy) return;
+    const nextIsActive = !editProjectIsActive;
+    if (!confirm(nextIsActive ? 'Activate this project?' : 'Deactivate this project?')) return;
+    setProjectDeleteBusy(true);
     try {
-      await deleteProject(id);
+      await updateProject(id, { isActive: nextIsActive });
+      if (fromModal) {
+        setProjectModalOpen(false);
+        setProjectForm(EMPTY_PROJECT_FORM);
+        setEditProjectId('');
+        setEditProjectIsActive(true);
+      }
       await Promise.all([loadProjects({ reset: true }), loadCounts()]);
-      showToast('Project deactivated.');
+      showToast(nextIsActive ? 'Project activated.' : 'Project deactivated.');
     } catch (err) {
-      showToast(err?.message || 'Delete failed.');
+      showToast(err?.message || 'Project status update failed.');
+    } finally {
+      setProjectDeleteBusy(false);
     }
   };
 
@@ -582,11 +854,74 @@ export default function Projects() {
     }
   };
 
+  const loadProjectSummary = async (projectId) => {
+    const id = String(projectId || '').trim();
+    if (!id) return;
+    setProjectSummaryLoading(true);
+    setProjectSummaryBusyId(id);
+    try {
+      const data = await projectSummary({ projectId: id });
+      setSelectedProjectSummary(normalizeProjectSummary(data));
+      setProjectSummaryModalOpen(true);
+    } catch (err) {
+      showToast(err?.message || 'Failed to load project summary.');
+    } finally {
+      setProjectSummaryLoading(false);
+      setProjectSummaryBusyId('');
+    }
+  };
+
   const selectedProjectCustomer = [...projectCustomerOptions, ...customers]
     .find((customer) => String(customer?.id || '') === String(projectForm.customerId || ''));
   const selectedProjectCustomerLabel = selectedProjectCustomer
     ? (selectedProjectCustomer.fullName || selectedProjectCustomer.id || '')
     : '';
+  const editingProject = editProjectId
+    ? projects.find((project) => String(project?.id || '') === String(editProjectId))
+    : null;
+  const visibleProjects = useMemo(() => projects.filter((project) => matchesProjectFilter(project, filterStatus)), [projects, filterStatus]);
+  const projectQuoteAmount = Number(selectedProjectSummary?.projectQuoteAmount || 0);
+  const projectLaborEarned = Number(selectedProjectSummary?.laborEarnings || 0);
+  const projectExpenses = Number(selectedProjectSummary?.projectExpenseTotal || 0);
+  const projectMaterialPaidByCustomer = Number(selectedProjectSummary?.materialPaidAmount || 0);
+  const projectMaterialExpenseNet = Number(selectedProjectSummary?.projectMaterialExpenseNetAfterCustomerPayments || 0);
+  const projectCompanyProjectRelatedExpenses = Number(selectedProjectSummary?.companyProjectRelatedExpenseTotal || 0);
+  const projectConsumedTotal = projectLaborEarned + projectCompanyProjectRelatedExpenses;
+  const projectLaborPct = projectQuoteAmount > 0 ? Math.max(0, Math.min(100, (projectLaborEarned / projectQuoteAmount) * 100)) : 0;
+  const projectCompanyProjectRelatedPct = projectQuoteAmount > 0 ? Math.max(0, Math.min(100 - projectLaborPct, (projectCompanyProjectRelatedExpenses / projectQuoteAmount) * 100)) : 0;
+  const projectRemainingPct = projectQuoteAmount > 0
+    ? Math.max(0, 100 - projectLaborPct - projectCompanyProjectRelatedPct)
+    : 100;
+  const projectChartSpentPct = projectQuoteAmount > 0
+    ? Math.min(100, Math.max(0, (projectConsumedTotal / projectQuoteAmount) * 100))
+    : 0;
+  const projectChartStyle = {
+    background: `conic-gradient(var(--fin-chart-labor) 0 ${projectLaborPct}%, var(--fin-chart-company) ${projectLaborPct}% ${projectLaborPct + projectCompanyProjectRelatedPct}%, var(--fin-chart-remaining) ${projectLaborPct + projectCompanyProjectRelatedPct}% 100%)`
+  };
+  const projectStatusToneClass = projectStatusTone(selectedProjectSummary?.projectStatus);
+  const projectQuoteInput = Number(projectForm.quoteAmount || 0);
+  const projectReferralInput = Number(projectForm.referralPercent || 0);
+  const projectReferralPreviewAmount = projectForm.referralEnabled
+    && !Number.isNaN(projectQuoteInput)
+    && !Number.isNaN(projectReferralInput)
+    ? (projectQuoteInput * projectReferralInput) / 100
+    : 0;
+  const groupedCounts = useMemo(() => {
+    const base = { all: 0, created: 0, progress: 0, review: 0, done: 0, deactive: 0 };
+    for (const project of projects) {
+      const bucket = projectFilterBucket(project);
+      if (bucket === 'deactive') {
+        base.deactive += 1;
+        continue;
+      }
+      base.all += 1;
+      if (bucket === 'created') base.created += 1;
+      else if (bucket === 'progress') base.progress += 1;
+      else if (bucket === 'review') base.review += 1;
+      else if (bucket === 'done') base.done += 1;
+    }
+    return base;
+  }, [projects]);
 
   if (!isActive) return <div id="projectsPage" className="tab-page hidden" />;
   if (!canManage) return <div id="projectsPage" className="tab-page active section card">Projects management is admin only.</div>;
@@ -605,32 +940,104 @@ export default function Projects() {
               <div className="prj-summary-header">
                 <h3>Projects</h3>
                 <div className="row" style={{ gap: 10, alignItems: 'center' }}>
-                  <div className="prj-summary-total"><div className="prj-total-label">Count</div><div className="prj-total-value">{projects.length}</div></div>
+                  <button
+                    type="button"
+                    className={`prj-summary-total projects-total-metric projects-filter-card${filterStatus === '' ? ' is-active' : ''}`}
+                    onClick={() => setFilterStatus('')}
+                    aria-pressed={filterStatus === ''}
+                  >
+                    <div className="prj-total-label">All Active Projects</div>
+                    <div className="prj-total-value">{groupedCounts.all}</div>
+                  </button>
                   <button type="button" className="ghost btn-tone-primary" onClick={openNewProjectModal}><FiPlusCircle />New Project</button>
                 </div>
               </div>
-              <div className="home-personal-grid" style={{ marginBottom: 10 }}>
-                <div className="metric"><span className="metric-label">Waiting Projects</span><span className="metric-value">{counts.waiting}</span></div>
-                <div className="metric projects-ongoing-metric"><span className="metric-label">Ongoing Projects</span><span className="metric-value">{counts.ongoing}</span></div>
+              <div className="projects-status-board" style={{ marginBottom: 10 }}>
+                <div className="projects-status-row projects-status-row-main">
+                  <button
+                    type="button"
+                    className={`metric projects-filter-card ${statusMetricClass('waiting')}${filterStatus === 'created' ? ' is-active' : ''}`.trim()}
+                    onClick={() => setFilterStatus('created')}
+                    aria-pressed={filterStatus === 'created'}
+                  >
+                    <span className="metric-label"><FiClock className="projects-status-icon" />Waiting</span>
+                    <span className="metric-value">{groupedCounts.created}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`metric projects-filter-card ${statusMetricClass('ongoing')}${filterStatus === 'progress' ? ' is-active' : ''}`.trim()}
+                    onClick={() => setFilterStatus('progress')}
+                    aria-pressed={filterStatus === 'progress'}
+                  >
+                    <span className="metric-label"><FiLoader className="projects-status-icon" />Progress</span>
+                    <span className="metric-value">{groupedCounts.progress}</span>
+                  </button>
+                </div>
+                <div className="projects-status-row projects-status-row-secondary">
+                  <button
+                    type="button"
+                    className={`metric projects-filter-card ${statusMetricClass('review')}${filterStatus === 'review' ? ' is-active' : ''}`.trim()}
+                    onClick={() => setFilterStatus('review')}
+                    aria-pressed={filterStatus === 'review'}
+                  >
+                    <span className="metric-label"><FiMessageCircle className="projects-status-icon" />Review</span>
+                    <span className="metric-value">{groupedCounts.review}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`metric projects-filter-card ${statusMetricClass('finished')}${filterStatus === 'done' ? ' is-active' : ''}`.trim()}
+                    onClick={() => setFilterStatus('done')}
+                    aria-pressed={filterStatus === 'done'}
+                  >
+                    <span className="metric-label"><FiCheckCircle className="projects-status-icon" />Done</span>
+                    <span className="metric-value">{groupedCounts.done}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`metric projects-filter-card ${statusMetricClass('canceled')}${filterStatus === 'deactive' ? ' is-active' : ''}`.trim()}
+                    onClick={() => setFilterStatus('deactive')}
+                    aria-pressed={filterStatus === 'deactive'}
+                  >
+                    <span className="metric-label"><FiSlash className="projects-status-icon" />Deactive</span>
+                    <span className="metric-value">{groupedCounts.deactive}</span>
+                  </button>
+                </div>
               </div>
               <div className="prj-filters-panel">
-                <div className="prj-filter-group prj-filter-group-compact">
-                  <input id="prjFilter" className="prj-search" placeholder="Search by project description or address" value={query} onChange={(e) => setQuery(e.target.value)} />
-                  <select id="prjStatus" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} aria-label="Project status filter">
-                    {STATUS_OPTIONS.map((opt) => <option key={opt.value || 'all'} value={opt.value}>{opt.label}</option>)}
-                  </select>
-                  <select value={filterCustomerId} onChange={(e) => setFilterCustomerId(e.target.value)} aria-label="Customer filter">
-                    <option value="">All customers</option>
-                    {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.fullName || customer.id}</option>)}
-                  </select>
-                  <button type="button" className="btn-tone-neutral" onClick={() => { setFilterStatus(''); setFilterCustomerId(''); setQuery(''); }}>Clear</button>
+                <div className="row" style={{ justifyContent: 'flex-end', marginBottom: filtersOpen ? 10 : 0 }}>
+                  <button
+                    type="button"
+                    className="ghost btn-tone-neutral"
+                    onClick={() => setFiltersOpen((prev) => !prev)}
+                    aria-expanded={filtersOpen}
+                    aria-controls="projectsFiltersPanel"
+                  >
+                    <FiChevronDown style={{ transform: filtersOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform .2s ease' }} />
+                    Filters
+                  </button>
                 </div>
+                {filtersOpen ? (
+                  <div id="projectsFiltersPanel" className="prj-filter-group prj-filter-group-compact">
+                    <input id="prjFilter" className="prj-search" placeholder="Search by project description or address" value={query} onChange={(e) => setQuery(e.target.value)} />
+                    <select id="prjStatus" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} aria-label="Project status filter">
+                      {PROJECT_FILTER_OPTIONS.map((opt) => <option key={opt.value || 'all'} value={opt.value}>{opt.label}</option>)}
+                    </select>
+                    <select value={filterCustomerId} onChange={(e) => setFilterCustomerId(e.target.value)} aria-label="Customer filter">
+                      <option value="">All customers</option>
+                      {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.fullName || customer.id}</option>)}
+                    </select>
+                    <button type="button" className="btn-tone-neutral" onClick={() => { setFilterStatus(''); setFilterCustomerId(''); setQuery(''); }}>Clear</button>
+                  </div>
+                ) : null}
               </div>
             </div>
 
             <div id="prjList" style={{ marginTop: 14 }}>
-              {projects.map((project) => {
+              {visibleProjects.map((project) => {
+                const statusKey = normalizeStatusKey(project.status);
                 const statusLabel = toStatusLabel(project.status);
+                const statusTone = toStatusTone(statusKey);
+                const finance = projectFinanceBreakdown(project);
                 const addressRaw = String(project.address?.raw || '').trim();
                 const directionsHref = buildDirectionsHref(addressRaw);
                 const customer = project.customer || {};
@@ -638,8 +1045,18 @@ export default function Projects() {
                 const customerPhoneHref = customerPhone ? `tel:${customerPhone.replace(/\s+/g, '')}` : '';
                 const customerSmsHref = customerPhone ? `sms:${customerPhone.replace(/\s+/g, '')}` : '';
                 return (
-                  <div key={project.id} className="prj-item" data-status={statusLabel}>
-                    <div className="prj-row1"><div className="prj-title">{project.description || 'Untitled project'}</div><span className={`pill ${statusLabel}`}>{statusLabel}</span></div>
+                  <div key={project.id} className="prj-item" data-status={statusTone}>
+                    <div className="prj-row1">
+                      <div className="prj-title">{project.description || 'Untitled project'}</div>
+                      <div className="prj-status-inline">
+                        <span className={`pill ${statusTone}`}>{statusLabel}</span>
+                        {statusKey === 'ongoing' ? (
+                          <span className="prj-ongoing-clock" title="Ongoing project">
+                            <FiClock />
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
                     <div className="prj-time">
                       {directionsHref ? (
                         <div className="address-link">
@@ -683,13 +1100,56 @@ export default function Projects() {
                         {customer.address ? <div className="prj-client-line"><strong>Address:</strong> {customer.address}</div> : null}
                       </div>
                     ) : null}
+                    <div className="prj-client-block prj-date-grid">
+                      <div className="prj-date-col prj-date-col-actual">
+                        <div className="prj-date-chip prj-date-chip-actual">
+                          <span className="prj-date-label">Actual Start</span>
+                          <strong>{formatDateOrDash(project.actualStartAt)}</strong>
+                        </div>
+                        <div className="prj-date-chip prj-date-chip-actual">
+                          <span className="prj-date-label">Actual End</span>
+                          <strong>{formatDateOrDash(project.actualEndAt)}</strong>
+                        </div>
+                      </div>
+                      <div className="prj-date-col prj-date-col-summary">
+                        <div className="prj-date-chip prj-date-chip-planned">
+                          <span className="prj-date-label">Planned Start</span>
+                          <strong>{formatDateOrDash(project.estimatedStartAt)}</strong>
+                        </div>
+                        <div className="prj-date-chip prj-date-chip-duration">
+                          <span className="prj-date-label">Total Duration</span>
+                          <strong>{formatDurationDaysOrDash(project.actualDurationDays)}</strong>
+                        </div>
+                      </div>
+                    </div>
                     {project.materials ? <div className="prj-client-block"><div className="prj-client-line"><strong>Materials:</strong> {project.materials}</div></div> : null}
                     <div className="prj-actions">
-                      <div className="prj-amount">{project.quoteAmount ? `$${Number(project.quoteAmount).toFixed(2)}` : '$0.00'}</div>
+                      <div className="prj-amount prj-finance-block" data-fallback={finance.usedFallback ? '1' : '0'}>
+                        <div className="prj-finance-row is-quote">
+                          <span>Total Quote</span>
+                          <strong>{moneyOrDash(finance.quote)}</strong>
+                        </div>
+                        <div className="prj-finance-row is-referral">
+                          <span>Referral</span>
+                          <strong>{moneyOrDash(finance.referralAmount)}</strong>
+                        </div>
+                        <div className="prj-finance-row is-net">
+                          <span>Net</span>
+                          <strong>{moneyOrDash(finance.netQuoteAfterReferral)}</strong>
+                        </div>
+                      </div>
                       <div className="prj-action-buttons">
                         <button type="button" className="ghost btn-tone-warning" onClick={() => startEditProject(project)}>Edit</button>
-                        <button type="button" className="ghost btn-tone-danger" onClick={() => onDeleteProject(project.id)} disabled={!canDelete} title={canDelete ? 'Delete project' : 'Only super admin can delete'}>Delete</button>
                         <button type="button" className="ghost btn-tone-success" onClick={() => openStatusModal(project)}>Status</button>
+                        <button
+                          type="button"
+                          className="ghost btn-tone-info btn-with-spinner"
+                          onClick={() => loadProjectSummary(project.id)}
+                          disabled={projectSummaryBusyId === String(project.id)}
+                        >
+                          {projectSummaryBusyId === String(project.id) ? <FiLoader className="btn-spinner" /> : null}
+                          <span>{projectSummaryBusyId === String(project.id) ? 'Loading...' : 'View Summary'}</span>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -697,8 +1157,8 @@ export default function Projects() {
               })}
             </div>
 
-            {!projects.length && !projectsLoading ? <div className="muted">No projects found.</div> : null}
-            {projectsLoading && !projects.length ? <div className="muted">Loading...</div> : null}
+            {!visibleProjects.length && !projectsLoading ? <div className="muted">No projects found.</div> : null}
+            {projectsLoading && !visibleProjects.length ? <div className="muted">Loading...</div> : null}
             {!projectsLoading && projectsCursor ? <button type="button" className="btn-tone-neutral" onClick={() => loadProjects()}>Load more</button> : null}
             <div ref={sentinelRef} />
           </>
@@ -765,7 +1225,107 @@ export default function Projects() {
         ) : null}
       </div>
 
-      <SimpleModal open={projectModalOpen} onClose={() => { if (!projectSaving) { setProjectModalOpen(false); setProjectCustomerSearch(''); setProjectCustomerPickerOpen(false); setProjectCustomerOptions([]); setProjectCustomerCursor(null); setProjectCustomerHasMore(false); } }} title={editProjectId ? 'Edit Project' : 'New Project'}>
+      <SimpleModal
+        open={projectSummaryModalOpen}
+        onClose={() => setProjectSummaryModalOpen(false)}
+        title={selectedProjectSummary?.projectDescription || 'Project Summary'}
+        size="md"
+      >
+        <div className="modal-form-grid">
+          <div className="full fin-project-summary-chart-card">
+            <div className="fin-project-summary-donut-wrap">
+              <div className="fin-project-summary-donut" style={projectChartStyle}>
+                {donutSegmentMarkers([
+                  { label: 'Labor', pct: projectLaborPct },
+                  { label: 'Company', pct: projectCompanyProjectRelatedPct },
+                  { label: 'Remain', pct: projectRemainingPct }
+                ]).map((marker) => (
+                  <span
+                    key={`projects-summary-${marker.key}`}
+                    className="fin-donut-marker is-sm"
+                    style={{
+                      left: `${50 + (marker.x * 46)}%`,
+                      top: `${50 + (marker.y * 46)}%`
+                    }}
+                    title={`${marker.label}: ${marker.pct.toFixed(1)}%`}
+                  >
+                    {marker.pct.toFixed(1)}%
+                  </span>
+                ))}
+                <div className="fin-project-summary-donut-center">
+                  {projectSummaryLoading ? <FiLoader className="btn-spinner" /> : <strong>{projectChartSpentPct.toFixed(1)}%</strong>}
+                  <small>{projectSummaryLoading ? 'Loading' : 'Spent'}</small>
+                </div>
+              </div>
+            </div>
+            <div className="fin-project-summary-chart-meta">
+              <div className="fin-project-summary-group">
+                <div className="fin-project-summary-row">
+                  <span className="dot labor" />
+                  <span>{`Labor (${projectLaborPct.toFixed(1)}%)`}</span>
+                  <strong>{money(projectLaborEarned)}</strong>
+                </div>
+                <div className="fin-project-summary-row">
+                  <span className="dot agreed" />
+                  <span>{`Company Expenses (Project-Related) (${projectCompanyProjectRelatedPct.toFixed(1)}%)`}</span>
+                  <strong>{money(projectCompanyProjectRelatedExpenses)}</strong>
+                </div>
+                <div className="fin-project-summary-row">
+                  <span className="dot remaining" />
+                  <span>{`Remaining (${projectRemainingPct.toFixed(1)}%)`}</span>
+                  <strong>{money(Math.max(0, projectQuoteAmount - projectConsumedTotal))}</strong>
+                </div>
+              </div>
+              <div className="fin-project-summary-group fin-project-summary-group-extra">
+                <div className="fin-project-summary-row">
+                  <span className="row-icon consumed" aria-hidden="true"><FiTrendingUp /></span>
+                  <span className="with-icon-label">Consumed</span>
+                  <strong>{money(projectConsumedTotal)}</strong>
+                </div>
+                <div className="fin-project-summary-row-group material-group">
+                  <div className="fin-project-summary-row">
+                    <span className="row-icon material" aria-hidden="true"><FiPlusCircle /></span>
+                    <span className="with-icon-label">Project Material Expenses</span>
+                    <strong>{money(projectExpenses)}</strong>
+                  </div>
+                  <div className="fin-project-summary-row">
+                    <span className="dot material-paid" />
+                    <span>Material Paid by Customer</span>
+                    <strong>{money(projectMaterialPaidByCustomer)}</strong>
+                  </div>
+                  <div className="fin-project-summary-row">
+                    <span className="dot material-net" />
+                    <span>Net Material Expense</span>
+                    <strong>{money(projectMaterialExpenseNet)}</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="full fin-project-summary-top">
+            <div className="fin-project-top-card">
+              <span className="home-metric-label">Status</span>
+              <span className={`home-metric-value fin-status-badge ${projectStatusToneClass}`}>{selectedProjectSummary?.projectStatus || '-'}</span>
+            </div>
+            <div className="fin-project-top-card">
+              <span className="home-metric-label">Agreed Amount</span>
+              <span className="home-metric-value">{money(selectedProjectSummary?.projectQuoteAmount)}</span>
+            </div>
+            <div className="fin-project-top-card total-cost">
+              <span className="home-metric-label">Consumed</span>
+              <span className="home-metric-value">{money(projectConsumedTotal)}</span>
+            </div>
+          </div>
+          <div className="full home-stat-grid fin-project-metrics">
+            <div className="home-metric"><span className="home-metric-label">Labor Hours Worked</span><span className="home-metric-value">{hoursFromMinutes(selectedProjectSummary?.laborMinutes)}</span></div>
+            <div className="home-metric"><span className="home-metric-label">Labor Earned</span><span className="home-metric-value">{money(selectedProjectSummary?.laborEarnings)}</span></div>
+            <div className="home-metric"><span className="home-metric-label">Project Material Expenses</span><span className="home-metric-value">{money(selectedProjectSummary?.projectExpenseTotal)}</span></div>
+            <div className="home-metric"><span className="home-metric-label">Company Expenses (Project-Related)</span><span className="home-metric-value">{money(selectedProjectSummary?.companyProjectRelatedExpenseTotal)}</span></div>
+          </div>
+        </div>
+      </SimpleModal>
+
+      <SimpleModal open={projectModalOpen} onClose={() => { if (!projectSaving && !projectDeleteBusy) { setProjectModalOpen(false); setProjectCustomerSearch(''); setProjectCustomerPickerOpen(false); setProjectCustomerOptions([]); setProjectCustomerCursor(null); setProjectCustomerHasMore(false); } }} title={editProjectId ? 'Edit Project' : 'New Project'}>
         <div className="modal-form-grid" style={{ position: 'relative' }}>
           {projectSaving ? <div className="modal-saving-overlay" aria-live="polite" aria-busy="true"><FiLoader className="btn-spinner" style={{ width: 26, height: 26 }} /><div>Saving project...</div></div> : null}
           <input className="full" placeholder="Description" value={projectForm.description} onChange={(e) => setProjectForm((prev) => ({ ...prev, description: e.target.value }))} />
@@ -782,6 +1342,42 @@ export default function Projects() {
           </div>
           <input type="date" placeholder="Estimated start date" value={projectForm.estimatedStartAt} onChange={(e) => setProjectForm((prev) => ({ ...prev, estimatedStartAt: e.target.value }))} disabled={projectSaving} />
           <input type="number" min="0" step="0.01" placeholder="Quote amount" value={projectForm.quoteAmount} onChange={(e) => setProjectForm((prev) => ({ ...prev, quoteAmount: e.target.value }))} disabled={projectSaving} />
+          <div className="full row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Referral</span>
+            <button
+              type="button"
+              className={`ghost ${projectForm.referralEnabled ? 'btn-tone-success' : 'btn-tone-neutral'}`}
+              onClick={() => setProjectForm((prev) => ({
+                ...prev,
+                referralEnabled: !prev.referralEnabled,
+                referralPercent: !prev.referralEnabled ? (prev.referralPercent || '20') : prev.referralPercent
+              }))}
+              disabled={projectSaving}
+            >
+              {projectForm.referralEnabled ? 'Enabled' : 'Disabled'}
+            </button>
+          </div>
+          {projectForm.referralEnabled ? (
+            <>
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                placeholder="Referral percent"
+                value={projectForm.referralPercent}
+                onChange={(e) => setProjectForm((prev) => ({ ...prev, referralPercent: e.target.value }))}
+                disabled={projectSaving}
+              />
+              <div className="full muted">Estimated referral expense (preview): {money(projectReferralPreviewAmount)}</div>
+            </>
+          ) : null}
+          <div className="full prj-client-block" style={{ margin: 0 }}>
+            <div className="prj-client-line"><strong>Planned Start:</strong> {projectForm.estimatedStartAt ? formatDateOrDash(projectForm.estimatedStartAt) : '--'}</div>
+            <div className="prj-client-line"><strong>Actual Start (system):</strong> {formatDateOrDash(editingProject?.actualStartAt)}</div>
+            <div className="prj-client-line"><strong>Actual End (system):</strong> {formatDateOrDash(editingProject?.actualEndAt)}</div>
+            <div className="prj-client-line"><strong>Actual Duration (system):</strong> {formatDurationDaysOrDash(editingProject?.actualDurationDays)}</div>
+          </div>
           <input
             className="full"
             placeholder="Search customer for project"
@@ -882,13 +1478,30 @@ export default function Projects() {
               <input placeholder="Location key (override)" value={projectForm.locationKey} onChange={(e) => setProjectForm((prev) => ({ ...prev, locationKey: e.target.value }))} disabled={projectSaving} />
               <input placeholder="Geo lat (override)" value={projectForm.geoLat} onChange={(e) => setProjectForm((prev) => ({ ...prev, geoLat: e.target.value }))} disabled={projectSaving} />
               <input placeholder="Geo lng (override)" value={projectForm.geoLng} onChange={(e) => setProjectForm((prev) => ({ ...prev, geoLng: e.target.value }))} disabled={projectSaving} />
-              <input placeholder="Geo radius m (override)" value={projectForm.geoRadiusMeters} onChange={(e) => setProjectForm((prev) => ({ ...prev, geoRadiusMeters: e.target.value }))} disabled={projectSaving} />
+              <input placeholder="Geo radius m (default 1000, override)" value={projectForm.geoRadiusMeters} onChange={(e) => setProjectForm((prev) => ({ ...prev, geoRadiusMeters: e.target.value }))} disabled={projectSaving} />
             </>
           ) : null}
           {projectFormError ? <div className="full muted">{projectFormError}</div> : null}
-          <div className="full row" style={{ justifyContent: 'flex-end' }}>
-            <button type="button" className="ghost btn-tone-neutral" onClick={() => setProjectModalOpen(false)} disabled={projectSaving}>Cancel</button>
-            <button type="button" className="btn-tone-primary btn-with-spinner" onClick={saveProject} disabled={projectSaving}>{projectSaving ? <FiLoader className="btn-spinner" /> : null}<span>{projectSaving ? 'Saving...' : (editProjectId ? 'Update' : 'Create')}</span></button>
+          <div className="full row" style={{ justifyContent: editProjectId ? 'space-between' : 'flex-end' }}>
+            {editProjectId && canDelete ? (
+              <button
+                type="button"
+                className="ghost btn-tone-danger btn-with-spinner"
+                onClick={() => onToggleProjectActive(editProjectId, { fromModal: true })}
+                disabled={projectSaving || projectDeleteBusy}
+              >
+                {projectDeleteBusy ? <FiLoader className="btn-spinner" /> : null}
+                <span>
+                  {projectDeleteBusy
+                    ? (editProjectIsActive ? 'Deactivating...' : 'Activating...')
+                    : (editProjectIsActive ? 'Deactivate Project' : 'Activate Project')}
+                </span>
+              </button>
+            ) : null}
+            <div className="row" style={{ justifyContent: 'flex-end' }}>
+              <button type="button" className="ghost btn-tone-neutral" onClick={() => setProjectModalOpen(false)} disabled={projectSaving || projectDeleteBusy}>Cancel</button>
+              <button type="button" className="btn-tone-primary btn-with-spinner" onClick={saveProject} disabled={projectSaving || projectDeleteBusy}>{projectSaving ? <FiLoader className="btn-spinner" /> : null}<span>{projectSaving ? 'Saving...' : (editProjectId ? 'Update' : 'Create')}</span></button>
+            </div>
           </div>
         </div>
       </SimpleModal>
@@ -933,7 +1546,7 @@ export default function Projects() {
           {statusSaving ? <div className="modal-saving-overlay" aria-live="polite" aria-busy="true"><FiLoader className="btn-spinner" style={{ width: 26, height: 26 }} /><div>Updating status...</div></div> : null}
           <div className="full muted">{statusTargetProject?.description || 'Project'}</div>
           <select className="full" value={statusValue} onChange={(e) => setStatusValue(e.target.value)} disabled={statusSaving}>
-            {STATUS_OPTIONS.filter((opt) => opt.value).map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+            {PROJECT_STATUS_UPDATE_OPTIONS.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
           </select>
           <div className="full row" style={{ justifyContent: 'flex-end' }}>
             <button type="button" className="ghost btn-tone-neutral" onClick={() => setStatusModalOpen(false)} disabled={statusSaving}>Cancel</button>

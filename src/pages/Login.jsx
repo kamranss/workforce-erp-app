@@ -1,11 +1,17 @@
 import { useState } from 'react';
-import { FiLoader } from 'react-icons/fi';
+import { FiKey, FiLoader } from 'react-icons/fi';
 import { useAuthActions } from '../context/AuthActionsProvider.jsx';
 
 export default function Login() {
   const [passCode, setPassCode] = useState('');
-  const { loginStatus, loginError, loginBusy, loginWithCode } = useAuthActions();
+  const { loginStatus, loginError, loginBusy, loginWithCode, loginWithPasskey, passkeySupport } = useAuthActions();
   const loginLog = (...args) => console.info('[login-ui]', ...args);
+  const quickLogin = (code, role) => {
+    if (loginBusy) return;
+    setPassCode(code);
+    loginLog('quick-login', { role, loginBusy });
+    loginWithCode(code);
+  };
 
   return (
     <div id="loginCard" className="section card">
@@ -13,9 +19,11 @@ export default function Login() {
       <p className="muted">Sign in with your 6-digit passCode.</p>
       <div className="login-row" style={{ marginTop: 8 }}>
         <input
+          type="password"
           inputMode="numeric"
           maxLength={6}
           placeholder="Enter 6-digit passCode"
+          autoComplete="off"
           value={passCode}
           onChange={(event) => setPassCode(event.target.value)}
           onKeyDown={(event) => {
@@ -40,20 +48,42 @@ export default function Login() {
           {loginBusy ? <FiLoader className="login-spinner" aria-hidden="true" /> : 'Go'}
         </button>
       </div>
-      <div className="login-quick-actions" style={{ marginTop: 10 }}>
+      <div className="login-row" style={{ marginTop: 8 }}>
         <button
           type="button"
-          className="ghost btn-tone-neutral"
-          onClick={() => {
-            setPassCode('123456');
-            loginLog('quick-login', { loginBusy });
-            loginWithCode('123456');
-          }}
+          className="ghost"
+          onClick={() => quickLogin('444444', 'user')}
           disabled={loginBusy}
+          style={{ flex: 1 }}
         >
-          Quick Login
+          User Quick Login
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          onClick={() => quickLogin('123456', 'admin')}
+          disabled={loginBusy}
+          style={{ flex: 1 }}
+        >
+          Admin Quick Login
         </button>
       </div>
+      {passkeySupport?.checked && passkeySupport?.available ? (
+        <div className="login-row" style={{ marginTop: 8 }}>
+          <button
+            type="button"
+            className="login-passkey-btn"
+            onClick={() => {
+              loginLog('passkey-click', { loginBusy });
+              loginWithPasskey();
+            }}
+            disabled={loginBusy}
+          >
+            {loginBusy ? <FiLoader className="login-spinner" aria-hidden="true" /> : <FiKey aria-hidden="true" />}
+            <span>{loginBusy ? 'Checking Face ID...' : 'Sign in with Face ID'}</span>
+          </button>
+        </div>
+      ) : null}
       {loginStatus ? <div className="muted" style={{ marginTop: 8 }}>{loginStatus}</div> : null}
       {loginError ? <div className="muted" style={{ marginTop: 8 }}>{loginError}</div> : null}
     </div>

@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
-import { FiActivity, FiChevronDown, FiClock, FiFilePlus, FiLoader, FiTrendingUp, FiUser } from 'react-icons/fi';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { FiActivity, FiCheckCircle, FiChevronDown, FiCircle, FiClock, FiFilePlus, FiFolder, FiLoader, FiNavigation, FiTrendingUp, FiUser } from 'react-icons/fi';
 import { dashboardOpenEntries, dashboardToday } from '../api/dashboardApi.js';
 import { listProjects } from '../api/projectsApi.js';
 import { projectUserBreakdown } from '../api/reportsApi.js';
-import { createTask, deleteTask, getTask, listTasks, myTasks, updateTask } from '../api/tasksApi.js';
+import { createTask, deleteTask, getTask, listTasks, myTasks, toggleTaskTodo, updateTask } from '../api/tasksApi.js';
 import { patchTimeEntry } from '../api/timeEntriesApi.js';
 import { listUsers } from '../api/usersApi.js';
 import SimpleModal from '../components/SimpleModal.jsx';
@@ -33,6 +33,12 @@ function toLocalDateTimeInputValue(value) {
   return local.toISOString().slice(0, 16);
 }
 
+function buildDirectionsHref(address) {
+  const raw = String(address || '').trim();
+  if (!raw) return '';
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(raw)}`;
+}
+
 function statusClass(value) {
   const key = normalizeTaskStatus(value);
   if (key === 'done') return 'done';
@@ -47,6 +53,13 @@ function formatTaskStatus(value) {
   return 'Created';
 }
 
+function taskStatusTone(value) {
+  const key = normalizeTaskStatus(value);
+  if (key === 'done') return 'Completed';
+  if (key === 'progress') return 'Started';
+  return 'Waiting';
+}
+
 function normalizeTaskStatus(value) {
   const key = String(value || '').trim().toLowerCase();
   if (key === 'ongoing') return 'progress';
@@ -54,16 +67,114 @@ function normalizeTaskStatus(value) {
   return 'created';
 }
 
-function nextTaskStatus(value) {
-  const current = normalizeTaskStatus(value);
-  if (current === 'created') return 'progress';
-  if (current === 'progress') return 'done';
-  return 'created';
+function isActiveProject(project) {
+  const statusKey = String(project?.status || '').trim().toLowerCase();
+  if (project?.isActive === false) return false;
+  if (project?.deletedAt) return false;
+  if (statusKey === 'canceled') return false;
+  return true;
+}
+
+function parseTaskDescriptionItems(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  return raw
+    .split(/\r?\n/)
+    .map((line) => String(line || '').trim())
+    .filter(Boolean)
+    .map((line) => line
+      .replace(/^[-*]\s+/, '')
+      .replace(/^\d+[.)]\s+/, '')
+      .replace(/^\u2022\s+/, '')
+      .trim())
+    .filter(Boolean);
+}
+
+function normalizeTaskTodoItems(value) {
+  const source = Array.isArray(value) ? value : [];
+  return source.map((item, index) => ({
+    id: String(item?.id || '').trim(),
+    text: String(item?.text || '').trim(),
+    isDone: Boolean(item?.isDone),
+    doneAt: item?.doneAt || null,
+    doneBy: item?.doneBy || null,
+    localKey: String(item?.id || `todo-${index}-${String(item?.text || '').trim() || 'item'}`)
+  })).filter((item) => item.text);
+}
+
+function createEmptyTaskTodoItem() {
+  return {
+    id: '',
+    text: '',
+    isDone: false,
+    doneAt: null,
+    doneBy: null,
+    localKey: `todo-new-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  };
+}
+
+function summarizeTaskTodos(task) {
+  const todoItems = normalizeTaskTodoItems(task?.todoItems);
+  const totalCount = Number((task?.todoTotalCount ?? todoItems.length) || 0);
+  const doneCount = Number((task?.todoDoneCount ?? todoItems.filter((item) => item.isDone).length) || 0);
+  const safeTotal = Math.max(totalCount, todoItems.length, 0);
+  const safeDone = Math.min(Math.max(doneCount, 0), safeTotal || doneCount);
+  const progressPercent = Number(
+    task?.todoProgressPercent
+    ?? (safeTotal > 0 ? ((safeDone / safeTotal) * 100) : 0)
+  );
+  return {
+    todoItems,
+    totalCount: safeTotal,
+    doneCount: safeDone,
+    progressPercent: Math.max(0, Math.min(100, progressPercent))
+  };
+}
+
+function isDueTomorrow(dueDate) {
+  if (!dueDate) return false;
+  const due = new Date(dueDate);
+  if (Number.isNaN(due.getTime())) return false;
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dueStart = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+  const dayMs = 24 * 60 * 60 * 1000;
+  const diffDays = Math.round((dueStart.getTime() - todayStart.getTime()) / dayMs);
+  return diffDays === 1;
+}
+
+function shouldShowTaskDueSoonBlink(task) {
+  return normalizeTaskPriority(task?.priority) === 'high';
+}
+
+const TASK_STATUS_OPTIONS = [
+  { value: 'created', label: 'Created' },
+  { value: 'progress', label: 'Progress' },
+  { value: 'done', label: 'Done' }
+];
+
+const TASK_PRIORITY_OPTIONS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' }
+];
+
+function normalizeTaskPriority(value) {
+  const key = String(value || '').trim().toLowerCase();
+  if (key === 'low' || key === 'high') return key;
+  return 'medium';
+}
+
+function formatTaskPriority(value) {
+  const key = normalizeTaskPriority(value);
+  if (key === 'high') return 'High';
+  if (key === 'low') return 'Low';
+  return 'Medium';
 }
 
 export default function Home() {
   const { activeTab, showToast, refreshTick, showGlobalLoader } = useUI();
-  const { role } = useAuth();
+  const { role, userId } = useAuth();
   const [today, setToday] = useState(null);
   const [openEntries, setOpenEntries] = useState([]);
   const [projectBreakdown, setProjectBreakdown] = useState([]);
@@ -78,8 +189,12 @@ export default function Home() {
     projectId: '',
     assignedToUserIds: [],
     status: 'created',
-    dueDate: ''
+    priority: 'medium',
+    startDate: toLocalDateTimeInputValue(new Date()),
+    dueDate: '',
+    address: ''
   });
+  const [taskTodoItems, setTaskTodoItems] = useState([createEmptyTaskTodoItem()]);
   const [taskUserOptions, setTaskUserOptions] = useState([]);
   const [taskProjects, setTaskProjects] = useState([]);
   const [taskProjectsCursor, setTaskProjectsCursor] = useState(null);
@@ -90,11 +205,16 @@ export default function Home() {
   const [taskProjectsSearch, setTaskProjectsSearch] = useState('');
   const [taskCursor, setTaskCursor] = useState(null);
   const [taskStatusFilter, setTaskStatusFilter] = useState('');
+  const [taskPriorityFilter, setTaskPriorityFilter] = useState('');
+  const [userTaskFilter, setUserTaskFilter] = useState('all');
   const [taskLoadBusy, setTaskLoadBusy] = useState(false);
   const [taskLoadMoreBusy, setTaskLoadMoreBusy] = useState(false);
   const [taskDetailOpen, setTaskDetailOpen] = useState(false);
   const [taskDetail, setTaskDetail] = useState(null);
   const [taskViewingId, setTaskViewingId] = useState('');
+  const [taskStatusModalOpen, setTaskStatusModalOpen] = useState(false);
+  const [taskStatusTarget, setTaskStatusTarget] = useState(null);
+  const [taskStatusValue, setTaskStatusValue] = useState('created');
   const [openEntriesExpanded, setOpenEntriesExpanded] = useState(false);
   const [openEntriesModalOpen, setOpenEntriesModalOpen] = useState(false);
   const [forcedEntry, setForcedEntry] = useState(null);
@@ -103,6 +223,7 @@ export default function Home() {
   const [forcedCheckoutBusy, setForcedCheckoutBusy] = useState(false);
   const [taskSaving, setTaskSaving] = useState(false);
   const [taskUpdatingId, setTaskUpdatingId] = useState('');
+  const [taskTodoUpdatingKey, setTaskTodoUpdatingKey] = useState('');
   const [taskDeletingId, setTaskDeletingId] = useState('');
   const [error, setError] = useState('');
   const [hasLoaded, setHasLoaded] = useState(false);
@@ -115,7 +236,49 @@ export default function Home() {
   const isActive = activeTab === 'home';
   const roleLower = String(role || '').toLowerCase();
   const isAdmin = roleLower === 'admin' || roleLower === 'superadmin';
+  const isUserRole = roleLower === 'user';
   const canDeleteTasks = roleLower === 'superadmin';
+  const allowRawAssigneeIds = String(process.env.NEXT_PUBLIC_DEBUG_RAW_IDS || '').trim() === '1';
+
+  const resetTaskEditorState = () => {
+    setTaskForm({
+      title: '',
+      description: '',
+      projectId: '',
+      assignedToUserIds: [],
+      status: 'created',
+      priority: 'medium',
+      startDate: toLocalDateTimeInputValue(new Date()),
+      dueDate: '',
+      address: ''
+    });
+    setTaskTodoItems([createEmptyTaskTodoItem()]);
+    setTaskEditId('');
+    setTaskUsersSearch('');
+    setTaskProjectsSearch('');
+    setTaskUsersPickerOpen(false);
+    setTaskProjectsPickerOpen(false);
+  };
+
+  const replaceTaskInLocalState = (nextTask) => {
+    if (!nextTask?.id) return;
+    const taskId = String(nextTask.id);
+    setHomeTasks((prev) => prev.map((item) => (String(item?.id || '') === taskId ? { ...item, ...nextTask } : item)));
+    setTaskDetail((prev) => (String(prev?.id || '') === taskId ? { ...prev, ...nextTask } : prev));
+    setTaskStatusTarget((prev) => (String(prev?.id || '') === taskId ? { ...prev, ...nextTask } : prev));
+  };
+
+  const isTaskAssignedToCurrentUser = (task) => {
+    const currentUserId = String(userId || '').trim();
+    if (!currentUserId) return false;
+    if (Array.isArray(task?.assignedToUsers) && task.assignedToUsers.some((user) => String(user?.id || user?._id || '').trim() === currentUserId)) {
+      return true;
+    }
+    if (Array.isArray(task?.assignedToUserIds) && task.assignedToUserIds.some((id) => String(id || '').trim() === currentUserId)) {
+      return true;
+    }
+    return false;
+  };
 
   const refreshDashboardAdminData = async () => {
     if (dashboardLoadLockRef.current) return;
@@ -209,18 +372,34 @@ export default function Home() {
         ? await listTasks({
           limit: 20,
           cursor: reset ? undefined : taskCursor,
-          status: taskStatusFilter || undefined
+          ...(taskStatusFilter
+            ? { status: taskStatusFilter }
+            : { includeDone: false })
         }, { cache: fresh ? false : undefined })
         : await myTasks({
           limit: 20,
-          cursor: reset ? undefined : taskCursor
+          cursor: reset ? undefined : taskCursor,
+          includeDone: userTaskFilter === 'done' ? true : false
         }, { cache: fresh ? false : undefined });
       const nextItemsRaw = Array.isArray(res?.items) ? res.items : [];
       const nextItems = isAdmin
         ? nextItemsRaw
-        : nextItemsRaw.filter((task) => normalizeTaskStatus(task?.status) !== 'done');
+        : nextItemsRaw.filter((task) => {
+          const status = normalizeTaskStatus(task?.status);
+          if (userTaskFilter === 'created') return status === 'created';
+          if (userTaskFilter === 'progress') return status === 'progress';
+          if (userTaskFilter === 'done') return status === 'done';
+          if (userTaskFilter === 'all') return status === 'created' || status === 'progress';
+          return status === 'created' || status === 'progress';
+        });
       setHomeTasks((prev) => (reset ? nextItems : [...prev, ...nextItems]));
       setTaskCursor(res?.nextCursor || null);
+    } catch (err) {
+      const statusCode = Number(err?.status || err?.response?.status || 0);
+      if (!isAdmin && (statusCode === 401 || statusCode === 403)) {
+        setError('Session/permission issue while loading assigned tasks. Please login again.');
+      }
+      throw err;
     } finally {
       taskLoadLockRef.current = false;
       setTaskLoadBusy(false);
@@ -240,7 +419,7 @@ export default function Home() {
         cursor: reset ? undefined : taskProjectsCursor,
         q: q || undefined
       });
-      const items = Array.isArray(res?.items) ? res.items : [];
+      const items = (Array.isArray(res?.items) ? res.items : []).filter(isActiveProject);
       const nextCursor =
         res?.nextCursor
         || res?.cursor
@@ -370,7 +549,7 @@ export default function Home() {
       return;
     }
     loadHomeTasks({ reset: true }).catch((err) => setError(err?.message || 'Failed to load tasks.'));
-  }, [hasLoaded, isAdmin, taskStatusFilter]);
+  }, [hasLoaded, isAdmin, userTaskFilter, taskStatusFilter]);
 
   useEffect(() => {
     if (!isAdmin || !openEntries.length) return;
@@ -398,29 +577,51 @@ export default function Home() {
         showToast('Title is required.');
         return;
       }
-      const dueDateIso = taskForm.dueDate ? new Date(taskForm.dueDate).toISOString() : '';
-      if (!dueDateIso || Number.isNaN(new Date(dueDateIso).getTime())) {
-        showToast('Valid due date is required.');
+      const startDateIso = taskForm.startDate ? new Date(taskForm.startDate).toISOString() : new Date().toISOString();
+      if (!startDateIso || Number.isNaN(new Date(startDateIso).getTime())) {
+        showToast('Valid start date is required.');
+        return;
+      }
+      const dueDateIso = taskForm.dueDate ? new Date(taskForm.dueDate).toISOString() : null;
+      if (dueDateIso && Number.isNaN(new Date(dueDateIso).getTime())) {
+        showToast('Due date is invalid.');
+        return;
+      }
+      if (dueDateIso && new Date(dueDateIso).getTime() < new Date(startDateIso).getTime()) {
+        showToast('Due date must be after start date.');
         return;
       }
       const assignedIds = Array.isArray(taskForm.assignedToUserIds)
         ? taskForm.assignedToUserIds.map((id) => String(id || '').trim()).filter(Boolean)
         : [];
+      const descriptionValue = String(taskForm.description || '').trim();
+      const todoItemsPayload = (Array.isArray(taskTodoItems) ? taskTodoItems : [])
+        .map((item) => ({
+          ...(item?.id ? { id: item.id } : {}),
+          text: String(item?.text || '').trim(),
+          isDone: Boolean(item?.isDone)
+        }))
+        .filter((item) => item.text);
+      const priority = normalizeTaskPriority(taskForm.priority);
+      const address = String(taskForm.address || '').trim();
       const payload = {
         title,
-        description: taskForm.description || undefined,
+        description: descriptionValue || undefined,
         projectId: taskForm.projectId || undefined,
         assignedToUserIds: assignedIds,
         status: taskForm.status || 'created',
-        dueDate: dueDateIso
+        priority,
+        startDate: startDateIso,
+        dueDate: dueDateIso,
+        address: address || undefined,
+        ...(todoItemsPayload.length ? { todoItems: todoItemsPayload } : { todoItems: [] })
       };
       if (taskEditId) {
         await updateTask(taskEditId, payload);
       } else {
         await createTask(payload);
       }
-      setTaskForm({ title: '', description: '', projectId: '', assignedToUserIds: [], status: 'created', dueDate: '' });
-      setTaskEditId('');
+      resetTaskEditorState();
       setTaskModalOpen(false);
       await loadHomeTasks({ reset: true, fresh: true, force: true });
       showToast(taskEditId ? 'Task updated.' : 'Task created.');
@@ -431,17 +632,26 @@ export default function Home() {
     }
   };
 
-  const changeTaskStatus = async (task) => {
-    const taskId = task?.id;
+  const openTaskStatusModal = (task) => {
+    const taskId = String(task?.id || '');
     if (!taskId) return;
-    const nextStatus = nextTaskStatus(task?.status);
+    setTaskStatusTarget(task);
+    setTaskStatusValue(normalizeTaskStatus(task?.status));
+    setTaskStatusModalOpen(true);
+  };
+
+  const changeTaskStatus = async () => {
+    const taskId = String(taskStatusTarget?.id || '');
+    if (!taskId || !taskStatusValue) return;
     setTaskUpdatingId(String(taskId || ''));
     try {
-      await updateTask(taskId, { status: nextStatus });
+      await updateTask(taskId, { status: taskStatusValue });
       await loadHomeTasks({ reset: true, fresh: true, force: true });
       if (String(taskDetail?.id || '') === String(taskId)) {
-        setTaskDetail((prev) => (prev ? { ...prev, status: nextStatus } : prev));
+        setTaskDetail((prev) => (prev ? { ...prev, status: taskStatusValue } : prev));
       }
+      setTaskStatusModalOpen(false);
+      setTaskStatusTarget(null);
     } catch (err) {
       showToast(err?.message || 'Task update failed.');
     } finally {
@@ -494,15 +704,20 @@ export default function Home() {
       .map((id) => String(id || '').trim())
       .filter(Boolean)
       .filter((id, idx, arr) => arr.indexOf(id) === idx);
+    const todoItems = normalizeTaskTodoItems(task?.todoItems);
     setTaskEditId(String(task?.id || ''));
     setTaskForm({
       title: task?.title || '',
-      description: task?.description || '',
+      description: String(task?.description || '').trim(),
       projectId: task?.projectId || '',
       assignedToUserIds,
       status: task?.status || 'created',
-      dueDate: task?.dueDate ? toLocalDateTimeInputValue(task.dueDate) : ''
+      priority: normalizeTaskPriority(task?.priority),
+      startDate: task?.startDate ? toLocalDateTimeInputValue(task.startDate) : toLocalDateTimeInputValue(new Date()),
+      dueDate: task?.dueDate ? toLocalDateTimeInputValue(task.dueDate) : '',
+      address: String(task?.address || '').trim()
     });
+    setTaskTodoItems(todoItems.length ? todoItems : [createEmptyTaskTodoItem()]);
     setTaskUsersSearch('');
     setTaskProjectsSearch('');
     setTaskUsersPickerOpen(false);
@@ -550,10 +765,15 @@ export default function Home() {
     ).trim() || '-';
     return { projectDescription, customerFullName, projectAddress };
   };
-  const resolveTaskAssignees = (task) => {
-    const namesFromObjects = Array.isArray(task?.assignedToUsers)
-      ? task.assignedToUsers.map((u) => `${u?.name || ''} ${u?.surname || ''}`.trim()).filter(Boolean)
-      : [];
+  const resolveTaskAssignees = (task, options = {}) => {
+    const forUser = Boolean(options?.forUser);
+    const assignedUsers = Array.isArray(task?.assignedToUsers) ? task.assignedToUsers : [];
+    if (forUser && userId && assignedUsers.some((u) => String(u?.id || u?._id || '').trim() === String(userId).trim())) {
+      return 'You';
+    }
+    const namesFromObjects = assignedUsers
+      .map((u) => `${u?.name || ''} ${u?.surname || ''}`.trim())
+      .filter(Boolean);
     if (namesFromObjects.length) return namesFromObjects.join(', ');
     const ids = Array.isArray(task?.assignedToUserIds)
       ? task.assignedToUserIds.map((id) => String(id || '').trim()).filter(Boolean)
@@ -561,9 +781,10 @@ export default function Home() {
     if (!ids.length) return '-';
     const namesFromLookup = ids.map((id) => {
       const found = taskUserOptions.find((u) => String(u?.id || '') === id);
-      return found ? `${found?.name || ''} ${found?.surname || ''}`.trim() : id;
+      return found ? `${found?.name || ''} ${found?.surname || ''}`.trim() : '';
     }).filter(Boolean);
-    return namesFromLookup.length ? namesFromLookup.join(', ') : '-';
+    if (namesFromLookup.length) return namesFromLookup.join(', ');
+    return allowRawAssigneeIds ? ids.join(', ') : '-';
   };
   const selectedAssigneesLabel = (() => {
     const ids = Array.isArray(taskForm.assignedToUserIds)
@@ -572,9 +793,10 @@ export default function Home() {
     if (!ids.length) return '';
     const names = ids.map((id) => {
       const found = taskUserOptions.find((u) => String(u?.id || '') === id);
-      return found ? `${found?.name || ''} ${found?.surname || ''}`.trim() : id;
+      return found ? `${found?.name || ''} ${found?.surname || ''}`.trim() : '';
     }).filter(Boolean);
-    return names.join(', ');
+    if (names.length) return names.join(', ');
+    return allowRawAssigneeIds ? ids.join(', ') : '';
   })();
   const selectedProjectLabel = (() => {
     const projectId = String(taskForm.projectId || '').trim();
@@ -582,18 +804,192 @@ export default function Home() {
     const found = taskProjects.find((project) => String(project?.id || '') === projectId);
     return found ? (found.description || found.id || '') : projectId;
   })();
+  const adminFilteredTasks = useMemo(() => {
+    if (!isAdmin) return homeTasks;
+    return homeTasks.filter((task) => {
+      const statusMatches = !taskStatusFilter || normalizeTaskStatus(task?.status) === taskStatusFilter;
+      const priorityMatches = !taskPriorityFilter || normalizeTaskPriority(task?.priority) === taskPriorityFilter;
+      return statusMatches && priorityMatches;
+    });
+  }, [homeTasks, isAdmin, taskStatusFilter, taskPriorityFilter]);
+
+  const updateTaskTodoItem = (localKey, value) => {
+    setTaskTodoItems((prev) => prev.map((item) => (
+      item.localKey === localKey
+        ? { ...item, text: value }
+        : item
+    )));
+  };
+
+  const toggleTaskTodoItemForEditor = (localKey) => {
+    setTaskTodoItems((prev) => prev.map((item) => (
+      item.localKey === localKey
+        ? {
+            ...item,
+            isDone: !item.isDone,
+            doneAt: item.isDone ? null : item.doneAt,
+            doneBy: item.isDone ? null : item.doneBy
+          }
+        : item
+    )));
+  };
+
+  const addTaskTodoItem = () => {
+    setTaskTodoItems((prev) => [...(Array.isArray(prev) ? prev : []), createEmptyTaskTodoItem()]);
+  };
+
+  const removeTaskTodoItem = (localKey) => {
+    setTaskTodoItems((prev) => {
+      const next = (Array.isArray(prev) ? prev : []).filter((item) => item.localKey !== localKey);
+      return next.length ? next : [createEmptyTaskTodoItem()];
+    });
+  };
+
+  const toggleTaskTodoItem = async (task, todoItem) => {
+    const taskId = String(task?.id || '').trim();
+    const todoItemId = String(todoItem?.id || '').trim();
+    if (!taskId || !todoItemId) return;
+    setTaskTodoUpdatingKey(`${taskId}:${todoItemId}`);
+    try {
+      const updatedTask = await toggleTaskTodo(taskId, {
+        todoItemId,
+        isDone: !todoItem?.isDone
+      });
+      replaceTaskInLocalState(updatedTask);
+      showToast('Checklist updated.', 'success');
+    } catch (err) {
+      showToast(err?.message || 'Checklist update failed.', 'error');
+    } finally {
+      setTaskTodoUpdatingKey('');
+    }
+  };
+
+  const getUserTaskNextStatus = (task) => {
+    const current = normalizeTaskStatus(task?.status);
+    if (current === 'created') return 'progress';
+    if (current === 'progress') return 'done';
+    if (current === 'done') return 'progress';
+    return 'progress';
+  };
+
+  const getUserTaskActionLabel = (task) => {
+    const current = normalizeTaskStatus(task?.status);
+    if (current === 'created') return 'Start';
+    if (current === 'progress') return 'Mark Done';
+    if (current === 'done') return 'Reopen';
+    return 'Update';
+  };
+
+  const updateUserTaskStatus = async (task) => {
+    const taskId = String(task?.id || '').trim();
+    if (!taskId) return;
+    const nextStatus = getUserTaskNextStatus(task);
+    setTaskUpdatingId(taskId);
+    const prevTasks = homeTasks;
+    setHomeTasks((prev) => prev.map((row) => (String(row?.id || '') === taskId ? { ...row, status: nextStatus } : row)));
+    try {
+      await updateTask(taskId, { status: nextStatus });
+      showToast('Task status updated.', 'success');
+      await loadHomeTasks({ reset: true, fresh: true, force: true });
+    } catch (err) {
+      setHomeTasks(prevTasks);
+      const statusCode = Number(err?.status || err?.response?.status || 0);
+      if (statusCode === 401 || statusCode === 403) {
+        setError('You are not authorized to update this task. Please login again.');
+      }
+      showToast(err?.message || 'Task status update failed.', 'error');
+    } finally {
+      setTaskUpdatingId('');
+    }
+  };
+
+  const renderTaskChecklist = (task, options = {}) => {
+    const { compact = false, interactive = false } = options;
+    const summary = summarizeTaskTodos(task);
+    if (!summary.totalCount) return null;
+    return (
+      <div className={`task-checklist${compact ? ' compact' : ''}`}>
+        <div className="task-checklist-head">
+          <div className="task-checklist-title-wrap">
+            <span className="task-checklist-label">Checklist</span>
+            <strong>{`${summary.doneCount} / ${summary.totalCount} completed`}</strong>
+          </div>
+          <span className="task-checklist-percent">{`${summary.progressPercent.toFixed(0)}%`}</span>
+        </div>
+        <div className="task-checklist-progress" aria-hidden="true">
+          <span style={{ width: `${summary.progressPercent}%` }} />
+        </div>
+        <div className="task-checklist-items">
+          {summary.todoItems.map((item) => {
+            const itemId = String(item.id || item.localKey || '').trim();
+            const isAssignedUser = interactive && !isAdmin;
+            const isPending = taskTodoUpdatingKey === `${String(task?.id || '').trim()}:${itemId}`;
+            const Icon = item.isDone ? FiCheckCircle : FiCircle;
+            const doneByName = `${item?.doneBy?.name || ''} ${item?.doneBy?.surname || ''}`.trim()
+              || item?.doneBy?.fullName
+              || item?.doneBy?.email
+              || '';
+            return (
+              <button
+                key={itemId || item.localKey}
+                type="button"
+                className={`task-checklist-item${item.isDone ? ' done' : ''}${isAssignedUser ? ' interactive' : ''}`}
+                onClick={isAssignedUser ? () => toggleTaskTodoItem(task, item) : undefined}
+                disabled={!isAssignedUser || isPending}
+              >
+                <span className="task-checklist-icon">
+                  {isPending ? <FiLoader className="btn-spinner" /> : <Icon />}
+                </span>
+                <span className="task-checklist-copy">
+                  <span className="task-checklist-text">{item.text}</span>
+                  {item.isDone && (item.doneAt || doneByName) ? (
+                    <small className="task-checklist-meta">
+                      {[
+                        doneByName ? `by ${doneByName}` : '',
+                        item.doneAt ? fmtDateTime(item.doneAt) : ''
+                      ].filter(Boolean).join(' | ')}
+                    </small>
+                  ) : null}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   const renderTaskDetailModal = () => (
     <SimpleModal open={taskDetailOpen} onClose={() => setTaskDetailOpen(false)} title="Task Details" size="sm">
       <div className="modal-form-grid task-detail-modal">
         <div className="full task-detail-head">
           <strong>{taskDetail?.title || 'Untitled task'}</strong>
-          <div className="muted">{taskDetail?.description || 'No description'}</div>
+          {(() => {
+            const descriptionItems = parseTaskDescriptionItems(taskDetail?.description || '');
+            if (!descriptionItems.length) return <div className="muted">No description</div>;
+            return (
+              <ul className="task-location task-desc-list">
+                {descriptionItems.map((item, index) => <li key={`task-detail-desc-${index}`}>{item}</li>)}
+              </ul>
+            );
+          })()}
         </div>
         <div className="full task-detail-grid">
           <div className="task-detail-chip">
             <span>Status</span>
             <strong className={`task-status-pill ${statusClass(taskDetail?.status)}`}>{formatTaskStatus(taskDetail?.status)}</strong>
+          </div>
+          <div className="task-detail-chip">
+            <span>Priority</span>
+            <strong className={`task-priority-pill ${normalizeTaskPriority(taskDetail?.priority)}`}>{formatTaskPriority(taskDetail?.priority)}</strong>
+          </div>
+          <div className="task-detail-chip">
+            <span>Start Date</span>
+            <strong>{taskDetail?.startDate ? new Date(taskDetail.startDate).toLocaleString() : '-'}</strong>
+          </div>
+          <div className="task-detail-chip">
+            <span>Created At</span>
+            <strong>{taskDetail?.createdAt ? new Date(taskDetail.createdAt).toLocaleString() : '-'}</strong>
           </div>
           <div className="task-detail-chip">
             <span>Due Date</span>
@@ -607,6 +1003,9 @@ export default function Home() {
             <span>Project</span>
             <strong>{resolveTaskProjectDescription(taskDetail)}</strong>
           </div>
+        </div>
+        <div className="full">
+          {renderTaskChecklist(taskDetail, { interactive: true })}
         </div>
         <div className="full row task-detail-actions">
           {isAdmin ? (
@@ -690,35 +1089,118 @@ export default function Home() {
           <div className="home-card-head">
             <div>
               <div className="eyebrow">My Work</div>
-              <h3>Assigned Tasks</h3>
+              <h3>My Assigned Tasks</h3>
             </div>
             <div className="row" style={{ gap: 8 }}>
               <div className="pill">{homeTasks.length}</div>
             </div>
           </div>
-          {error ? <div className="muted">{error}</div> : null}
-          {!error && !homeTasks.length ? <div className="task-empty">No assigned tasks.</div> : null}
+          {isUserRole ? (
+            <div className="prj-filter-group prj-time-filter home-task-status-row">
+              <button type="button" className={`prj-time-btn${userTaskFilter === 'all' ? ' active' : ''}`} onClick={() => setUserTaskFilter('all')}>All</button>
+              <button type="button" className={`prj-time-btn${userTaskFilter === 'created' ? ' active' : ''}`} onClick={() => setUserTaskFilter('created')}>Created</button>
+              <button type="button" className={`prj-time-btn${userTaskFilter === 'progress' ? ' active' : ''}`} onClick={() => setUserTaskFilter('progress')}>In Progress</button>
+              <button type="button" className={`prj-time-btn${userTaskFilter === 'done' ? ' active' : ''}`} onClick={() => setUserTaskFilter('done')}>Done</button>
+            </div>
+          ) : null}
+          {error ? (
+            <div className="task-empty">
+              <div>{error}</div>
+              <div style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  className="btn-tone-neutral"
+                  onClick={() => {
+                    loadHomeTasks({ reset: true, fresh: true, force: true }).catch((err) => {
+                      setError(err?.message || 'Failed to load tasks.');
+                    });
+                  }}
+                >
+                  Retry
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {!error && !homeTasks.length ? <div className="task-empty">No tasks assigned to you right now.</div> : null}
           <div className="task-list">
             {homeTasks.map((task) => (
               (() => {
                 const projectMeta = resolveTaskProjectMeta(task);
-                return (
-              <div key={task.id} className={`task-row ${statusClass(task.status)}`}>
-                <span className={`task-status-chip task-status-corner ${normalizeTaskStatus(task.status)}`}>{formatTaskStatus(task.status)}</span>
-                <div className="task-title">{task.title || 'Untitled task'}</div>
-                <div className="task-location">{task.description || 'No description'}</div>
-                <div className="task-footer">
-                  <span className="task-due">{task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'No due date'}</span>
-                  <span className="task-due">{`Assigned: ${resolveTaskAssignees(task)}`}</span>
-                  <span className="task-due">
-                    {`${projectMeta.projectDescription} | Customer: ${projectMeta.customerFullName} | Address: ${projectMeta.projectAddress}`}
-                  </span>
+                const showDueSoonBlink = shouldShowTaskDueSoonBlink(task);
+                const dueDateText = task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'No due date';
+                const startDateText = task.startDate ? new Date(task.startDate).toLocaleDateString() : '-';
+                const assignedText = resolveTaskAssignees(task, { forUser: true });
+                const projectAddress = String(projectMeta.projectAddress || '').trim();
+                const projectDirectionsHref = buildDirectionsHref(projectAddress);
+              const statusTone = taskStatusTone(task.status);
+              const priorityTone = normalizeTaskPriority(task.priority);
+              return (
+              <div key={task.id} className="prj-item" data-status={statusTone}>
+                <div className="prj-row1">
+                  <div className="prj-title">{task.title || 'Untitled task'}</div>
+                  <div className="prj-status-inline">
+                    <span className="task-inline-field">
+                      <span className="task-inline-label">Status</span>
+                      <span className={`pill ${statusTone}`}>{formatTaskStatus(task.status)}</span>
+                    </span>
+                    <span className="task-inline-field">
+                      <span className="task-inline-label">Priority</span>
+                      <span className={`task-priority-pill ${priorityTone}`}>{formatTaskPriority(task.priority)}</span>
+                    </span>
+                    {showDueSoonBlink ? (
+                      <span className="task-due-soon-clock" title="Due tomorrow">
+                        <FiClock />
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
-                <div className="task-actions">
-                  <button type="button" className="ghost btn-tone-info btn-with-spinner" onClick={() => openTaskDetail(task.id)} disabled={taskViewingId === String(task.id)}>
-                    {taskViewingId === String(task.id) ? <FiLoader className="btn-spinner" /> : null}
-                    <span>{taskViewingId === String(task.id) ? 'Loading...' : 'View'}</span>
-                  </button>
+                <div className="address-link">
+                  <span className="prj-time-muted address-link-text"><strong>Project:</strong> {projectMeta.projectDescription}</span>
+                  <span className="address-link-icon-btn task-inline-icon" aria-hidden="true"><FiFolder /></span>
+                </div>
+                <div className="address-link">
+                  <span className="prj-time-muted address-link-text"><strong>Customer:</strong> {projectMeta.customerFullName}</span>
+                  <span className="address-link-icon-btn task-inline-icon" aria-hidden="true"><FiUser /></span>
+                </div>
+                <div className="address-link">
+                  <span className="prj-time-muted address-link-text"><strong>Address:</strong> {projectAddress || '-'}</span>
+                  {projectDirectionsHref ? (
+                    <a className="address-link-icon-btn" href={projectDirectionsHref} target="_blank" rel="noreferrer" aria-label={`Open directions for ${projectAddress}`} title="Open directions">
+                      <FiNavigation />
+                    </a>
+                  ) : null}
+                </div>
+                <div className="prj-time-muted"><strong>Assigned:</strong> {assignedText}</div>
+                {(() => {
+                  const descriptionItems = parseTaskDescriptionItems(task.description || '');
+                  if (!descriptionItems.length) return <div className="prj-time-muted">No description</div>;
+                  return (
+                    <div className="task-desc-minimal">
+                      <span className="task-desc-minimal-label">Description</span>
+                      <ul className="task-location task-desc-list">
+                        {descriptionItems.map((item, idx) => <li key={`${task.id}-desc-${idx}`}>{item}</li>)}
+                      </ul>
+                    </div>
+                  );
+                })()}
+                {renderTaskChecklist(task, { compact: true, interactive: true })}
+                <div className="prj-actions">
+                  <div className="prj-amount">{startDateText} → {dueDateText}</div>
+                  <div className="prj-action-buttons">
+                    <button
+                      type="button"
+                      className="ghost btn-tone-success btn-with-spinner"
+                      onClick={() => updateUserTaskStatus(task)}
+                      disabled={taskUpdatingId === String(task.id)}
+                    >
+                      {taskUpdatingId === String(task.id) ? <FiLoader className="btn-spinner" /> : null}
+                      <span>{taskUpdatingId === String(task.id) ? 'Updating...' : getUserTaskActionLabel(task)}</span>
+                    </button>
+                    <button type="button" className="ghost btn-tone-info btn-with-spinner" onClick={() => openTaskDetail(task.id)} disabled={taskViewingId === String(task.id)}>
+                      {taskViewingId === String(task.id) ? <FiLoader className="btn-spinner" /> : null}
+                      <span>{taskViewingId === String(task.id) ? 'Loading...' : 'View'}</span>
+                    </button>
+                  </div>
                 </div>
               </div>
                 );
@@ -863,12 +1345,7 @@ export default function Home() {
             </div>
             <div className="row" style={{ gap: 8 }}>
               <button type="button" className="ghost btn-tone-primary" onClick={() => {
-                setTaskEditId('');
-                setTaskForm({ title: '', description: '', projectId: '', assignedToUserIds: [], status: 'created', dueDate: '' });
-                setTaskUsersSearch('');
-                setTaskProjectsSearch('');
-                setTaskUsersPickerOpen(false);
-                setTaskProjectsPickerOpen(false);
+                resetTaskEditorState();
                 setTaskModalOpen(true);
               }}>
                 <FiFilePlus />
@@ -876,43 +1353,106 @@ export default function Home() {
               </button>
             </div>
           </div>
-          <div className="prj-filter-group prj-time-filter home-task-status-row">
-            <button type="button" className={`prj-time-btn${taskStatusFilter === '' ? ' active' : ''}`} onClick={() => setTaskStatusFilter('')}>All</button>
-            <button type="button" className={`prj-time-btn${taskStatusFilter === 'created' ? ' active' : ''}`} onClick={() => setTaskStatusFilter('created')}>Created</button>
-            <button type="button" className={`prj-time-btn${taskStatusFilter === 'progress' ? ' active' : ''}`} onClick={() => setTaskStatusFilter('progress')}>Progress</button>
-            <button type="button" className={`prj-time-btn${taskStatusFilter === 'done' ? ' active' : ''}`} onClick={() => setTaskStatusFilter('done')}>Done</button>
+          <div className="home-task-filter-panels">
+            <div className="home-task-filter-panel">
+              <div className="home-task-filter-label">Status</div>
+              <div className="prj-filter-group prj-time-filter home-task-status-row">
+                <button type="button" className={`prj-time-btn${taskStatusFilter === '' ? ' active' : ''}`} onClick={() => setTaskStatusFilter('')}>All</button>
+                <button type="button" className={`prj-time-btn${taskStatusFilter === 'created' ? ' active' : ''}`} onClick={() => setTaskStatusFilter('created')}>Created</button>
+                <button type="button" className={`prj-time-btn${taskStatusFilter === 'progress' ? ' active' : ''}`} onClick={() => setTaskStatusFilter('progress')}>Progress</button>
+                <button type="button" className={`prj-time-btn${taskStatusFilter === 'done' ? ' active' : ''}`} onClick={() => setTaskStatusFilter('done')}>Done</button>
+              </div>
+            </div>
+            <div className="home-task-filter-panel">
+              <div className="home-task-filter-label">Priority</div>
+              <div className="prj-filter-group prj-time-filter home-task-status-row">
+                <button type="button" className={`prj-time-btn${taskPriorityFilter === '' ? ' active' : ''}`} onClick={() => setTaskPriorityFilter('')}>All</button>
+                <button type="button" className={`prj-time-btn${taskPriorityFilter === 'low' ? ' active' : ''}`} onClick={() => setTaskPriorityFilter('low')}>Low</button>
+                <button type="button" className={`prj-time-btn${taskPriorityFilter === 'medium' ? ' active' : ''}`} onClick={() => setTaskPriorityFilter('medium')}>Medium</button>
+                <button type="button" className={`prj-time-btn${taskPriorityFilter === 'high' ? ' active' : ''}`} onClick={() => setTaskPriorityFilter('high')}>High</button>
+              </div>
+            </div>
           </div>
-          {!homeTasks.length ? <div className="task-empty">No tasks yet.</div> : null}
+          {!adminFilteredTasks.length ? <div className="task-empty">No tasks yet.</div> : null}
           <div className="task-list">
-          {homeTasks.slice(0, 20).map((task) => (
+          {adminFilteredTasks.slice(0, 20).map((task) => (
             (() => {
               const projectMeta = resolveTaskProjectMeta(task);
+              const showDueSoonBlink = shouldShowTaskDueSoonBlink(task);
+              const dueDateText = task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'No due date';
+              const startDateText = task.startDate ? new Date(task.startDate).toLocaleDateString() : '-';
+              const assignedText = resolveTaskAssignees(task);
+              const projectAddress = String(projectMeta.projectAddress || '').trim();
+              const projectDirectionsHref = buildDirectionsHref(projectAddress);
+              const statusTone = taskStatusTone(task.status);
+              const priorityTone = normalizeTaskPriority(task.priority);
               return (
-            <div key={task.id} className={`task-row ${statusClass(task.status)}`}>
-              <span className={`task-status-chip task-status-corner ${normalizeTaskStatus(task.status)}`}>{formatTaskStatus(task.status)}</span>
-              <div className="task-title">{task.title || 'Untitled task'}</div>
-              <div className="task-location">{task.description || 'No description'}</div>
-              <div className="task-footer">
-                <span className="task-due">{task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'No due date'}</span>
-                <span className="task-due">{`Assigned: ${resolveTaskAssignees(task)}`}</span>
-                <span className="task-due">
-                  {`${projectMeta.projectDescription} | Customer: ${projectMeta.customerFullName} | Address: ${projectMeta.projectAddress}`}
-                </span>
+            <div key={task.id} className="prj-item" data-status={statusTone}>
+              <div className="prj-row1">
+                <div className="prj-title">{task.title || 'Untitled task'}</div>
+                <div className="prj-status-inline">
+                  <span className="task-inline-field">
+                    <span className="task-inline-label">Status</span>
+                    <span className={`pill ${statusTone}`}>{formatTaskStatus(task.status)}</span>
+                  </span>
+                  <span className="task-inline-field">
+                    <span className="task-inline-label">Priority</span>
+                    <span className={`task-priority-pill ${priorityTone}`}>{formatTaskPriority(task.priority)}</span>
+                  </span>
+                  {showDueSoonBlink ? (
+                    <span className="task-due-soon-clock" title="Due tomorrow">
+                      <FiClock />
+                    </span>
+                  ) : null}
+                </div>
               </div>
-              <div className="task-actions">
-                <button type="button" className="ghost btn-tone-info btn-with-spinner" onClick={() => openTaskDetail(task.id)} disabled={taskViewingId === String(task.id)}>
-                  {taskViewingId === String(task.id) ? <FiLoader className="btn-spinner" /> : null}
-                  <span>{taskViewingId === String(task.id) ? 'Loading...' : 'View'}</span>
-                </button>
-                <button
-                  type="button"
-                  className="ghost btn-tone-success btn-with-spinner"
-                  onClick={() => changeTaskStatus(task)}
-                  disabled={taskUpdatingId === String(task.id)}
-                >
-                    {taskUpdatingId === String(task.id) ? <FiLoader className="btn-spinner" /> : null}
-                    <span>{taskUpdatingId === String(task.id) ? 'Updating...' : `Set ${formatTaskStatus(nextTaskStatus(task.status))}`}</span>
-                </button>
+              <div className="address-link">
+                <span className="prj-time-muted address-link-text"><strong>Project:</strong> {projectMeta.projectDescription}</span>
+                <span className="address-link-icon-btn task-inline-icon" aria-hidden="true"><FiFolder /></span>
+              </div>
+              <div className="address-link">
+                <span className="prj-time-muted address-link-text"><strong>Customer:</strong> {projectMeta.customerFullName}</span>
+                <span className="address-link-icon-btn task-inline-icon" aria-hidden="true"><FiUser /></span>
+              </div>
+              <div className="address-link">
+                <span className="prj-time-muted address-link-text"><strong>Address:</strong> {projectAddress || '-'}</span>
+                {projectDirectionsHref ? (
+                  <a className="address-link-icon-btn" href={projectDirectionsHref} target="_blank" rel="noreferrer" aria-label={`Open directions for ${projectAddress}`} title="Open directions">
+                    <FiNavigation />
+                  </a>
+                ) : null}
+              </div>
+              <div className="prj-time-muted"><strong>Assigned:</strong> {assignedText}</div>
+              {(() => {
+                const descriptionItems = parseTaskDescriptionItems(task.description || '');
+                if (!descriptionItems.length) return <div className="prj-time-muted">No description</div>;
+                return (
+                  <div className="task-desc-minimal">
+                    <span className="task-desc-minimal-label">Description</span>
+                    <ul className="task-location task-desc-list">
+                      {descriptionItems.map((item, idx) => <li key={`${task.id}-desc-admin-${idx}`}>{item}</li>)}
+                    </ul>
+                  </div>
+                );
+              })()}
+              {renderTaskChecklist(task, { compact: true })}
+              <div className="prj-actions">
+                <div className="prj-amount">{startDateText} → {dueDateText}</div>
+                <div className="prj-action-buttons">
+                  <button type="button" className="ghost btn-tone-info btn-with-spinner" onClick={() => openTaskDetail(task.id)} disabled={taskViewingId === String(task.id)}>
+                    {taskViewingId === String(task.id) ? <FiLoader className="btn-spinner" /> : null}
+                    <span>{taskViewingId === String(task.id) ? 'Loading...' : 'View'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost btn-tone-success btn-with-spinner"
+                    onClick={() => openTaskStatusModal(task)}
+                    disabled={taskUpdatingId === String(task.id)}
+                  >
+                      {taskUpdatingId === String(task.id) ? <FiLoader className="btn-spinner" /> : null}
+                      <span>{taskUpdatingId === String(task.id) ? 'Updating...' : 'Status'}</span>
+                  </button>
+                </div>
               </div>
             </div>
               );
@@ -928,21 +1468,85 @@ export default function Home() {
       </div>
 
       <SimpleModal open={taskModalOpen} onClose={() => {
-        setTaskUsersSearch('');
-        setTaskProjectsSearch('');
-        setTaskUsersPickerOpen(false);
-        setTaskProjectsPickerOpen(false);
+        resetTaskEditorState();
         setTaskModalOpen(false);
       }} title={taskEditId ? 'Edit Task' : 'Create Task'} size="sm">
         <div className="modal-form-grid">
           <input className="full" placeholder="title" value={taskForm.title} onChange={(e) => setTaskForm({ ...taskForm, title: e.target.value })} />
-          <input className="full" placeholder="description" value={taskForm.description} onChange={(e) => setTaskForm({ ...taskForm, description: e.target.value })} />
+          <div className="full task-desc-editor">
+            <div className="task-hint" style={{ marginBottom: 6 }}>Description (optional)</div>
+            <textarea
+              className="full"
+              rows={4}
+              placeholder="Add task notes or context"
+              value={taskForm.description}
+              onChange={(e) => setTaskForm({ ...taskForm, description: e.target.value })}
+            />
+          </div>
+          <div className="full task-desc-editor">
+            <div className="task-hint" style={{ marginBottom: 6 }}>Checklist Items (optional)</div>
+            {taskTodoItems.map((item, idx) => (
+              <div key={item.localKey} className="task-desc-row">
+                <span className={`task-desc-bullet${item.isDone ? ' done' : ''}`}>{item.isDone ? <FiCheckCircle /> : <FiCircle />}</span>
+                <input
+                  className="full"
+                  placeholder={`Checklist item ${idx + 1}`}
+                  value={item.text}
+                  onChange={(e) => updateTaskTodoItem(item.localKey, e.target.value)}
+                />
+                <button
+                  type="button"
+                  className={`ghost ${item.isDone ? 'btn-tone-success' : 'btn-tone-warning'}`}
+                  onClick={() => toggleTaskTodoItemForEditor(item.localKey)}
+                >
+                  {item.isDone ? 'Done' : 'Pending'}
+                </button>
+                <button
+                  type="button"
+                  className="ghost btn-tone-neutral"
+                  onClick={() => removeTaskTodoItem(item.localKey)}
+                  disabled={taskTodoItems.length <= 1}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+            <button type="button" className="ghost btn-tone-info" onClick={addTaskTodoItem}>+ Add Checklist Item</button>
+          </div>
+          <select
+            className="full"
+            value={normalizeTaskPriority(taskForm.priority)}
+            onChange={(e) => setTaskForm({ ...taskForm, priority: e.target.value })}
+          >
+            {TASK_PRIORITY_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label} Priority</option>
+            ))}
+          </select>
+          <div className="full">
+            <div className="task-hint" style={{ marginBottom: 6 }}>Start Date</div>
+            <input
+              className="full"
+              type="datetime-local"
+              placeholder="Start date"
+              value={taskForm.startDate}
+              onChange={(e) => setTaskForm({ ...taskForm, startDate: e.target.value })}
+            />
+          </div>
+          <div className="full">
+            <div className="task-hint" style={{ marginBottom: 6 }}>Due Date (Optional)</div>
+            <input
+              className="full"
+              type="datetime-local"
+              placeholder="Due date (optional)"
+              value={taskForm.dueDate}
+              onChange={(e) => setTaskForm({ ...taskForm, dueDate: e.target.value })}
+            />
+          </div>
           <input
             className="full"
-            type="datetime-local"
-            placeholder="Due date"
-            value={taskForm.dueDate}
-            onChange={(e) => setTaskForm({ ...taskForm, dueDate: e.target.value })}
+            placeholder="Address (optional)"
+            value={taskForm.address}
+            onChange={(e) => setTaskForm({ ...taskForm, address: e.target.value })}
           />
           <div className="full">
             <div className="task-hint" style={{ marginBottom: 6 }}>Assign Users (optional)</div>
@@ -1082,6 +1686,50 @@ export default function Home() {
             <button type="button" onClick={saveTask} disabled={taskSaving} className="btn-tone-primary btn-with-spinner">
               {taskSaving ? <FiLoader className="btn-spinner" /> : null}
               <span>{taskSaving ? (taskEditId ? 'Updating...' : 'Creating...') : (taskEditId ? 'Update' : 'Create')}</span>
+            </button>
+          </div>
+        </div>
+      </SimpleModal>
+
+      <SimpleModal
+        open={taskStatusModalOpen}
+        onClose={() => {
+          if (taskUpdatingId) return;
+          setTaskStatusModalOpen(false);
+          setTaskStatusTarget(null);
+        }}
+        title="Change Task Status"
+        size="sm"
+      >
+        <div className="modal-form-grid">
+          <div className="full muted">{taskStatusTarget?.title || 'Task'}</div>
+          <select
+            className="full"
+            value={taskStatusValue}
+            onChange={(e) => setTaskStatusValue(e.target.value)}
+            disabled={Boolean(taskUpdatingId)}
+          >
+            {TASK_STATUS_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          <div className="full row" style={{ justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              className="ghost btn-tone-neutral"
+              onClick={() => { setTaskStatusModalOpen(false); setTaskStatusTarget(null); }}
+              disabled={Boolean(taskUpdatingId)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-tone-success btn-with-spinner"
+              onClick={changeTaskStatus}
+              disabled={Boolean(taskUpdatingId)}
+            >
+              {taskUpdatingId ? <FiLoader className="btn-spinner" /> : null}
+              <span>{taskUpdatingId ? 'Updating...' : 'Update Status'}</span>
             </button>
           </div>
         </div>
