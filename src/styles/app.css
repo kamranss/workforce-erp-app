@@ -6175,34 +6175,32 @@ body[data-theme="dark"] #projectsPage .projects-total-metric .prj-total-value{
 }
 .projects-filter-card{
   cursor:pointer;
-  transition:transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+  transition:transform .16s ease, box-shadow .16s ease, border-color .16s ease, background-color .16s ease;
 }
 .projects-filter-card:active{
   transform:translateY(1px);
 }
 .projects-filter-card.is-active{
   border-color:var(--accent) !important;
-  box-shadow:0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent), 0 10px 24px rgba(15, 23, 42, 0.12);
 }
 #projectsPage .projects-status-board{
-  border:1px solid var(--glass-6);
-  border-radius:18px;
-  background:linear-gradient(180deg, var(--glass-2), var(--glass-1));
-  padding:10px;
+  border:1px solid var(--glass-5);
+  border-radius:20px;
+  background:linear-gradient(180deg, var(--glass-1a), var(--glass-1));
+  padding:12px;
   display:flex;
   flex-direction:column;
-  gap:10px;
+  gap:12px;
 }
 #projectsPage .projects-status-row{
   display:grid;
-  gap:10px;
+  gap:12px;
 }
 #projectsPage .projects-status-row-main{
-  display:flex;
-  justify-content:space-between;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
 }
 #projectsPage .projects-status-row-main .projects-filter-card{
-  flex:1 1 0;
   min-width:0;
 }
 #projectsPage .projects-status-row-secondary{
@@ -6213,21 +6211,25 @@ body[data-theme="dark"] #projectsPage .projects-total-metric .prj-total-value{
   position:relative;
   overflow:hidden;
   border-width:1px;
-  box-shadow:0 1px 1px rgba(15,20,30,0.06);
+  border-color:var(--glass-6);
+  box-shadow:0 8px 18px rgba(15,20,30,0.08);
   display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:10px;
+  flex-direction:column;
+  align-items:flex-start;
+  justify-content:flex-start;
+  gap:8px;
+  min-height:80px;
+  padding:10px 11px 9px 12px;
 }
 #projectsPage .projects-status-board .projects-filter-card::before{
   content:"";
   position:absolute;
   left:0;
   top:0;
-  bottom:0;
-  width:4px;
+  right:0;
+  height:3px;
   background:var(--metric-accent, var(--accent));
-  opacity:.95;
+  opacity:.9;
 }
 #projectsPage .projects-status-board .projects-filter-card .metric-label,
 #projectsPage .projects-status-board .projects-filter-card .metric-value{
@@ -6237,25 +6239,92 @@ body[data-theme="dark"] #projectsPage .projects-total-metric .prj-total-value{
 #projectsPage .projects-status-board .projects-filter-card .metric-label{
   display:inline-flex;
   align-items:center;
-  gap:6px;
-  letter-spacing:.06em;
+  gap:7px;
+  letter-spacing:.04em;
+  font-size:11px;
+  font-weight:700;
+  color:var(--muted);
+  text-transform:uppercase;
 }
 #projectsPage .projects-status-board .projects-filter-card .metric-value{
-  font-size:18px;
+  font-size:23px;
   line-height:1;
+  font-weight:800;
+  letter-spacing:-0.02em;
+  color:var(--text);
 }
 #projectsPage .projects-status-board .projects-status-icon{
-  width:14px;
-  height:14px;
+  width:15px;
+  height:15px;
   color:var(--metric-accent, var(--accent));
+}
+#projectsPage .projects-status-board .projects-filter-card.is-active::after{
+  content:"★";
+  position:absolute;
+  top:8px;
+  right:9px;
+  width:18px;
+  height:18px;
+  border-radius:999px;
+  display:grid;
+  place-items:center;
+  font-size:11px;
+  font-weight:900;
+  color:#92400e;
+  background:linear-gradient(135deg, #fde68a, #f59e0b);
+  border:1px solid rgba(217, 119, 6, 0.55);
+  box-shadow:0 4px 10px rgba(245, 158, 11, 0.3);
 }
 #projectsPage .projects-waiting-metric{ --metric-accent:#6b7280; }
 #projectsPage .projects-ongoing-metric{ --metric-accent:#f59e0b; }
 #projectsPage .projects-review-metric{ --metric-accent:#3b82f6; }
 #projectsPage .projects-finished-metric{ --metric-accent:#22c55e; }
 #projectsPage .projects-canceled-metric{ --metric-accent:#4b5563; }
+#projectsPage .projects-status-board .projects-waiting-metric{
+  background:linear-gradient(145deg, rgba(241,245,249,0.92), rgba(226,232,240,0.78));
+}
+#projectsPage .projects-status-board .projects-ongoing-metric{
+  background:linear-gradient(145deg, rgba(255,247,237,0.95), rgba(254,240,138,0.2));
+}
+#projectsPage .projects-status-board .projects-review-metric{
+  background:linear-gradient(145deg, rgba(239,246,255,0.96), rgba(191,219,254,0.26));
+}
+#projectsPage .projects-status-board .projects-finished-metric{
+  background:linear-gradient(145deg, rgba(240,253,244,0.96), rgba(187,247,208,0.24));
+}
+#projectsPage .projects-status-board .projects-canceled-metric{
+  background:linear-gradient(145deg, rgba(241,245,249,0.92), rgba(203,213,225,0.36));
+}
+body[data-theme="dark"] #projectsPage .projects-status-board .projects-waiting-metric{
+  background:linear-gradient(145deg, rgba(30,41,59,0.92), rgba(51,65,85,0.76));
+}
+body[data-theme="dark"] #projectsPage .projects-status-board .projects-ongoing-metric{
+  background:linear-gradient(145deg, rgba(92,51,23,0.56), rgba(120,53,15,0.42));
+}
+body[data-theme="dark"] #projectsPage .projects-status-board .projects-review-metric{
+  background:linear-gradient(145deg, rgba(30,58,138,0.46), rgba(37,99,235,0.28));
+}
+body[data-theme="dark"] #projectsPage .projects-status-board .projects-finished-metric{
+  background:linear-gradient(145deg, rgba(20,83,45,0.56), rgba(21,128,61,0.28));
+}
+body[data-theme="dark"] #projectsPage .projects-status-board .projects-canceled-metric{
+  background:linear-gradient(145deg, rgba(51,65,85,0.72), rgba(71,85,105,0.42));
+}
+body[data-theme="dark"] #projectsPage .projects-status-board .projects-filter-card.is-active::after{
+  color:#fde68a;
+  background:linear-gradient(135deg, rgba(217,119,6,0.9), rgba(180,83,9,0.86));
+  border-color:rgba(251,191,36,0.55);
+  box-shadow:0 4px 10px rgba(0,0,0,0.38);
+}
 #projectsPage .prj-summary-header .projects-total-metric.projects-filter-card{
   background:inherit;
+}
+@media (hover:hover){
+  #projectsPage .projects-status-board .projects-filter-card:hover{
+    transform:translateY(-1px);
+    box-shadow:0 12px 26px rgba(15,20,30,0.12);
+    border-color:color-mix(in srgb, var(--metric-accent, var(--accent)) 45%, var(--glass-6));
+  }
 }
 @media (max-width:640px){
   #projectsPage .projects-status-row-secondary{
@@ -6263,6 +6332,13 @@ body[data-theme="dark"] #projectsPage .projects-total-metric .prj-total-value{
   }
   #projectsPage .projects-status-row-secondary .projects-filter-card:last-child{
     grid-column:1 / -1;
+  }
+  #projectsPage .projects-status-board .projects-filter-card{
+    min-height:74px;
+    padding:9px 9px 8px 11px;
+  }
+  #projectsPage .projects-status-board .projects-filter-card .metric-value{
+    font-size:20px;
   }
 }
 
@@ -6315,81 +6391,65 @@ body[data-theme="dark"] #projectsPage .projects-total-metric .prj-total-value{
   padding:2px 5px;
 }
 .fin-company-donut-marker{
-  min-width:84px;
-  max-width:118px;
-  padding:7px 10px 7px 12px;
+  min-width:94px;
+  max-width:136px;
+  padding:4px 7px;
   display:flex;
-  flex-direction:column;
-  gap:3px;
-  align-items:flex-start;
-  border-radius:14px;
-  border-color:color-mix(in srgb, var(--marker-accent, #64748b) 48%, white);
-  box-shadow:0 10px 22px rgba(15, 23, 42, 0.16);
-  white-space:normal;
-}
-.fin-company-donut-marker::before{
-  content:"";
-  position:absolute;
-  width:24px;
-  height:2px;
-  top:50%;
-  background:var(--marker-accent, #64748b);
-  transform:translateY(-50%);
-  border-radius:999px;
-  opacity:0.95;
+  flex-direction:row;
+  gap:0;
+  align-items:center;
+  border-radius:8px;
+  border-color:color-mix(in srgb, var(--marker-accent, #64748b) 40%, white);
+  box-shadow:none;
+  background:color-mix(in srgb, var(--card) 94%, transparent);
+  white-space:nowrap;
 }
 .fin-company-donut-marker.is-right{
   transform:translate(0, -50%);
 }
 .fin-company-donut-marker.is-left{
   transform:translate(-100%, -50%);
-  align-items:flex-end;
+  align-items:center;
   text-align:right;
-}
-.fin-company-donut-marker.is-right::before{
-  left:-24px;
-}
-.fin-company-donut-marker.is-left::before{
-  right:-24px;
-}
-.fin-company-donut-marker::after{
-  content:"";
-  position:absolute;
-  top:50%;
-  width:8px;
-  height:8px;
-  transform:translateY(-50%) rotate(45deg);
-}
-.fin-company-donut-marker.is-right::after{
-  left:-8px;
-  border-left:2px solid var(--marker-accent, #64748b);
-  border-bottom:2px solid var(--marker-accent, #64748b);
-}
-.fin-company-donut-marker.is-left::after{
-  right:-8px;
-  border-top:2px solid var(--marker-accent, #64748b);
-  border-right:2px solid var(--marker-accent, #64748b);
 }
 .fin-company-donut-marker strong{
   display:block;
-  max-width:100%;
+  max-width:124px;
   overflow:hidden;
   text-overflow:ellipsis;
   white-space:nowrap;
-  font-size:11px;
-  line-height:1.15;
+  font-size:9px;
+  line-height:1.2;
+  font-weight:800;
 }
 .fin-company-donut-marker small{
   display:block;
   color:var(--muted);
-  font-size:10px;
+  font-size:9px;
   line-height:1;
   font-weight:800;
 }
 body[data-theme="dark"] .fin-company-donut-marker{
-  background:rgba(15, 23, 42, 0.9);
+  background:rgba(15, 23, 42, 0.78);
   border-color:color-mix(in srgb, var(--marker-accent, #94a3b8) 62%, rgba(15, 23, 42, 0.9));
-  box-shadow:0 12px 24px rgba(2, 6, 23, 0.34);
+  box-shadow:none;
+}
+.fin-company-donut-connectors{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  overflow:visible;
+  pointer-events:none;
+  z-index:1;
+}
+.fin-company-donut-connector{
+  fill:none;
+  stroke:var(--marker-accent, #64748b);
+  stroke-width:1.6;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+  opacity:0.95;
 }
 .fin-report-donut-center{
   width:110px;
@@ -6498,21 +6558,27 @@ body[data-theme="dark"] .fin-report-health.danger{
     font-size:13px;
   }
   .fin-company-donut-marker{
-    min-width:76px;
-    max-width:96px;
-    padding:6px 8px 6px 10px;
+    min-width:74px;
+    max-width:92px;
+    padding:2px 4px;
   }
   .fin-company-donut-marker.is-right{
-    transform:translate(-8%, -50%);
+    transform:translate(0, -50%);
   }
   .fin-company-donut-marker.is-left{
-    transform:translate(-92%, -50%);
+    transform:translate(-100%, -50%);
   }
   .fin-company-donut-marker strong{
-    font-size:10px;
+    max-width:84px;
+    font-size:8px;
   }
-  .fin-company-donut-marker small{
-    font-size:9px;
+  .fin-company-donut-connectors{
+    inset:0;
+    width:100%;
+    height:100%;
+  }
+  .fin-company-donut-connector{
+    stroke-width:1.4;
   }
 }
 
@@ -6584,27 +6650,24 @@ body[data-theme="dark"] .fin-report-health.danger{
 
 #financePage .fin-company-expenses-grid{
   display:grid;
-  grid-template-columns:repeat(2, minmax(0, 1fr));
+  grid-template-columns:1fr;
   gap:14px;
 }
 
 #financePage .fin-company-expenses-card{
+  grid-template-columns:1fr;
   align-items:start;
+  gap:14px;
+  overflow:visible;
+}
+
+#financePage .fin-company-expenses-card .fin-report-donut-wrap{
+  width:100%;
+  overflow:visible;
 }
 
 #financePage .fin-company-expenses-card .fin-report-overview-meta{
-  min-width:0;
-}
-
-@media (min-width:1024px){
-  #financePage .fin-company-expenses-card{
-    grid-template-columns:minmax(300px, 340px) minmax(0, 1fr);
-  }
-
-  #financePage .fin-company-expenses-card .fin-report-donut-wrap{
-    min-height:220px;
-    overflow:visible;
-  }
+  width:100%;
 }
 
 #financePage .fin-company-expenses-list-label{
@@ -6680,9 +6743,9 @@ body[data-theme="dark"] #financePage .fin-company-expenses-scope-card{
   }
 }
 
-@media (max-width:1240px){
+@media (min-width:1440px){
   #financePage .fin-company-expenses-grid{
-    grid-template-columns:1fr;
+    grid-template-columns:repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -9372,5 +9435,39 @@ body[data-theme="dark"] #projectsPage .prj-ongoing-clock{
 
   #profilePage .profile-metrics{
     grid-template-columns:repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* Desktop-only tuning: company expenses donut marker readability */
+@media (min-width:1024px){
+  #financePage .fin-company-expenses-card .fin-report-donut-wrap{
+    min-height:360px;
+    padding:10px 20px 8px;
+  }
+
+  #financePage .fin-company-expenses-card .fin-report-donut{
+    width:clamp(228px, 20vw, 272px);
+    height:clamp(228px, 20vw, 272px);
+  }
+
+  #financePage .fin-company-expenses-card .fin-company-donut-marker{
+    min-width:106px;
+    max-width:166px;
+  }
+
+  #financePage .fin-company-expenses-card .fin-company-donut-marker strong{
+    max-width:152px;
+    font-size:10px;
+  }
+}
+
+@media (min-width:1280px){
+  #financePage .fin-company-expenses-card .fin-report-donut-wrap{
+    min-height:380px;
+  }
+
+  #financePage .fin-company-expenses-card .fin-report-donut{
+    width:clamp(242px, 19vw, 292px);
+    height:clamp(242px, 19vw, 292px);
   }
 }

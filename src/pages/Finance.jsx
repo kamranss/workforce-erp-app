@@ -288,14 +288,135 @@ function donutSegmentMarkers(segments, minPct = 5) {
   return out;
 }
 
-function companyDonutMarkerStyle(marker, accentColor) {
-  const x = Math.max(-0.74, Math.min(0.74, Number(marker?.x || 0)));
-  const y = Math.max(-0.76, Math.min(0.76, Number(marker?.y || 0)));
-  return {
-    left: `${50 + (x * 74)}%`,
-    top: `${50 + (y * 64)}%`,
-    '--marker-accent': accentColor
+function layoutCompanyDonutMarkers(segments, minPct = 4) {
+  const base = donutSegmentMarkers(segments, minPct).map((item, index) => ({
+    ...item,
+    uid: `${item.key}-${index}`,
+    side: item.x >= 0 ? 'right' : 'left',
+    plotX: item.x >= 0 ? 0.98 : -0.98,
+    plotY: item.y
+  }));
+
+  const MIN_Y = -0.84;
+  const MAX_Y = 0.84;
+  const MIN_GAP = 0.2;
+
+  const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+  const adjustSide = (side) => {
+    const list = base
+      .filter((item) => item.side === side)
+      .sort((a, b) => a.plotY - b.plotY);
+
+    if (!list.length) return;
+
+    list[0].plotY = clamp(list[0].plotY, MIN_Y, MAX_Y);
+    for (let index = 1; index < list.length; index += 1) {
+      list[index].plotY = Math.max(list[index].plotY, list[index - 1].plotY + MIN_GAP);
+    }
+
+    if (list[list.length - 1].plotY > MAX_Y) {
+      list[list.length - 1].plotY = MAX_Y;
+      for (let index = list.length - 2; index >= 0; index -= 1) {
+        list[index].plotY = Math.min(list[index].plotY, list[index + 1].plotY - MIN_GAP);
+      }
+    }
+
+    if (list[0].plotY < MIN_Y) {
+      list[0].plotY = MIN_Y;
+      for (let index = 1; index < list.length; index += 1) {
+        list[index].plotY = Math.max(list[index].plotY, list[index - 1].plotY + MIN_GAP);
+      }
+    }
   };
+
+  adjustSide('left');
+  adjustSide('right');
+  return base;
+}
+
+function buildCompanyMarkerVisuals(markers, segments, segmentLabelKey = 'label') {
+  const colorByLabel = new Map(
+    (Array.isArray(segments) ? segments : []).map((segment) => [
+      String(segment?.[segmentLabelKey] || '').trim(),
+      segment?.color
+    ])
+  );
+  const source = Array.isArray(markers) ? markers : [];
+  const draft = source.map((marker, index) => ({
+    marker,
+    index,
+    leftPct: 50 + (marker.plotX * 58),
+    topPct: 50 + (marker.plotY * 50)
+  }));
+
+  const sortedBySide = (side) => draft
+    .filter((entry) => entry.marker.side === side)
+    .sort((a, b) => a.topPct - b.topPct);
+
+  const rightSide = sortedBySide('right');
+  const leftSide = sortedBySide('left');
+
+  rightSide.forEach((entry, laneIndex) => {
+    entry.laneIndex = laneIndex;
+    entry.lineRailX = Math.min(98, 92 + (laneIndex * 1.8));
+  });
+  leftSide.forEach((entry, laneIndex) => {
+    entry.laneIndex = laneIndex;
+    entry.lineRailX = Math.max(2, 8 - (laneIndex * 1.8));
+  });
+
+  return draft.map((entry) => {
+    const marker = entry.marker;
+    const lineStartX = 50 + (marker.x * 49);
+    const lineStartY = 50 + (marker.y * 49);
+    const lineEndX = entry.leftPct;
+    const lineY = entry.topPct;
+    const accent = colorByLabel.get(String(marker.label || '').trim()) || '#64748b';
+    const waveOffset = (entry.laneIndex % 2 === 0 ? 0.45 : -0.45);
+
+    return {
+      ...marker,
+      leftPct: entry.leftPct,
+      topPct: entry.topPct,
+      lineStartX,
+      lineStartY,
+      lineRailX: entry.lineRailX,
+      lineEndX,
+      lineY,
+      waveOffset,
+      accent
+    };
+  });
+}
+
+function buildCompanyConnectorPath(marker) {
+  const startX = Number(marker?.lineStartX || 0);
+  const startY = Number(marker?.lineStartY || 0);
+  const railX = Number(marker?.lineRailX || 0);
+  const endX = Number(marker?.lineEndX || 0);
+  const endY = Number(marker?.lineY || 0);
+  const wave = Number(marker?.waveOffset || 0);
+
+  const horizontalDir = railX >= startX ? 1 : -1;
+  const verticalDir = endY >= startY ? 1 : -1;
+  const maxCorner = Math.min(1.2, Math.abs(endY - startY) / 2.2 + 0.2);
+
+  const firstCornerEntryX = railX - (horizontalDir * maxCorner);
+  const firstCornerExitY = startY + (verticalDir * maxCorner);
+  const secondCornerEntryY = endY - (verticalDir * maxCorner);
+  const secondCornerExitX = railX + (horizontalDir * maxCorner);
+  const midX = (railX + endX) / 2;
+  const waveY = endY + wave;
+
+  return [
+    `M ${startX} ${startY}`,
+    `L ${firstCornerEntryX} ${startY}`,
+    `Q ${railX} ${startY} ${railX} ${firstCornerExitY}`,
+    `L ${railX} ${secondCornerEntryY}`,
+    `Q ${railX} ${endY} ${secondCornerExitX} ${endY}`,
+    `Q ${midX} ${waveY} ${endX} ${endY}`
+  ].join(' ');
 }
 
 function percentageHealth(value, mode = 'consumed') {
@@ -1865,6 +1986,24 @@ export default function Finance() {
   const companyExpensesData = companyExpensesReport || normalizeCompanyExpensesOverview(null);
   const companyExpensesLaborChart = buildBreakdownChart(companyExpensesData.laborBreakdown, COMPANY_EXPENSES_LABOR_COLORS);
   const companyExpensesCategoryChart = buildBreakdownChart(companyExpensesData.expenseCategoryBreakdown, COMPANY_EXPENSES_CATEGORY_COLORS);
+  const companyExpensesLaborMarkers = layoutCompanyDonutMarkers(
+    companyExpensesLaborChart.segments.map((item) => ({ label: item.name, pct: item.pct })),
+    4
+  );
+  const companyExpensesCategoryMarkers = layoutCompanyDonutMarkers(
+    companyExpensesCategoryChart.segments.map((item) => ({ label: item.label, pct: item.pct })),
+    4
+  );
+  const companyExpensesLaborMarkerVisuals = buildCompanyMarkerVisuals(
+    companyExpensesLaborMarkers,
+    companyExpensesLaborChart.segments,
+    'name'
+  );
+  const companyExpensesCategoryMarkerVisuals = buildCompanyMarkerVisuals(
+    companyExpensesCategoryMarkers,
+    companyExpensesCategoryChart.segments,
+    'label'
+  );
   const companyExpensesSummary = companyExpensesData.summary;
   const companyExpensesRangeLabel = companyExpensesData.range?.label || 'Current year';
   const companyExpensesHasLabor = companyExpensesData.laborBreakdown.some((item) => Number(item.amount || 0) > 0);
@@ -2434,18 +2573,28 @@ export default function Finance() {
                     <div className="fin-report-overview-card fin-company-expenses-card">
                       <div className="fin-report-donut-wrap">
                         <div className="fin-report-donut" style={companyExpensesLaborChart.chartStyle}>
-                          {donutSegmentMarkers(companyExpensesLaborChart.segments.map((item) => ({ label: item.name, pct: item.pct })), 7).map((marker) => (
+                          <svg className="fin-company-donut-connectors" viewBox="0 0 100 100" aria-hidden="true">
+                            {companyExpensesLaborMarkerVisuals.map((marker) => (
+                              <path
+                                key={`company-labor-line-${marker.uid}`}
+                                className="fin-company-donut-connector"
+                                style={{ '--marker-accent': marker.accent }}
+                                d={buildCompanyConnectorPath(marker)}
+                              />
+                            ))}
+                          </svg>
+                          {companyExpensesLaborMarkerVisuals.map((marker) => (
                             <span
-                              key={`company-labor-${marker.key}`}
-                              className={`fin-donut-marker fin-company-donut-marker${marker.x >= 0 ? ' is-right' : ' is-left'}`}
-                              style={companyDonutMarkerStyle(
-                                marker,
-                                companyExpensesLaborChart.segments.find((item) => item.name === marker.label)?.color || COMPANY_EXPENSES_LABOR_COLORS[0]
-                              )}
+                              key={`company-labor-${marker.uid}`}
+                              className={`fin-donut-marker fin-company-donut-marker${marker.side === 'right' ? ' is-right' : ' is-left'}`}
+                              style={{
+                                left: `${marker.leftPct}%`,
+                                top: `${marker.topPct}%`,
+                                '--marker-accent': marker.accent
+                              }}
                               title={`${marker.label}: ${marker.pct.toFixed(1)}%`}
                             >
-                              <strong>{marker.label}</strong>
-                              <small>{marker.pct.toFixed(1)}%</small>
+                              <strong>{`${marker.pct.toFixed(1)}% ${marker.label}`}</strong>
                             </span>
                           ))}
                           <div className="fin-report-donut-center">
@@ -2485,18 +2634,28 @@ export default function Finance() {
                     <div className="fin-report-overview-card fin-company-expenses-card">
                       <div className="fin-report-donut-wrap">
                         <div className="fin-report-donut" style={companyExpensesCategoryChart.chartStyle}>
-                          {donutSegmentMarkers(companyExpensesCategoryChart.segments.map((item) => ({ label: item.label, pct: item.pct })), 7).map((marker) => (
+                          <svg className="fin-company-donut-connectors" viewBox="0 0 100 100" aria-hidden="true">
+                            {companyExpensesCategoryMarkerVisuals.map((marker) => (
+                              <path
+                                key={`company-category-line-${marker.uid}`}
+                                className="fin-company-donut-connector"
+                                style={{ '--marker-accent': marker.accent }}
+                                d={buildCompanyConnectorPath(marker)}
+                              />
+                            ))}
+                          </svg>
+                          {companyExpensesCategoryMarkerVisuals.map((marker) => (
                             <span
-                              key={`company-category-${marker.key}`}
-                              className={`fin-donut-marker fin-company-donut-marker${marker.x >= 0 ? ' is-right' : ' is-left'}`}
-                              style={companyDonutMarkerStyle(
-                                marker,
-                                companyExpensesCategoryChart.segments.find((item) => item.label === marker.label)?.color || COMPANY_EXPENSES_CATEGORY_COLORS[0]
-                              )}
+                              key={`company-category-${marker.uid}`}
+                              className={`fin-donut-marker fin-company-donut-marker${marker.side === 'right' ? ' is-right' : ' is-left'}`}
+                              style={{
+                                left: `${marker.leftPct}%`,
+                                top: `${marker.topPct}%`,
+                                '--marker-accent': marker.accent
+                              }}
                               title={`${marker.label}: ${marker.pct.toFixed(1)}%`}
                             >
-                              <strong>{marker.label}</strong>
-                              <small>{marker.pct.toFixed(1)}%</small>
+                              <strong>{`${marker.pct.toFixed(1)}% ${marker.label}`}</strong>
                             </span>
                           ))}
                           <div className="fin-report-donut-center">
@@ -2546,14 +2705,6 @@ export default function Finance() {
                         <span>Company Project Related</span>
                         <strong>{money(companyExpensesData.expenseScopeBreakdown.companyProjectRelated.amount)}</strong>
                         <small>{`${companyExpensesData.expenseScopeBreakdown.companyProjectRelated.count} items`}</small>
-                      </div>
-                    </div>
-                    <div className="fin-company-expenses-scope-card">
-                      <div className="eyebrow">Range</div>
-                      <div className="fin-company-expenses-range-copy">
-                        <strong>{companyExpensesRangeLabel}</strong>
-                        <small>{companyExpensesData.range?.timeZone || 'Time zone not provided'}</small>
-                        <small>{companyExpensesData.range?.from && companyExpensesData.range?.to ? `${companyExpensesData.range.from} to ${companyExpensesData.range.to}` : 'Range dates unavailable'}</small>
                       </div>
                     </div>
                   </div>
