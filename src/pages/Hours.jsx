@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FiChevronDown, FiClock, FiEdit, FiEye, FiLoader, FiPlusCircle, FiTrash2, FiUser } from 'react-icons/fi';
+import { FiChevronDown, FiClock, FiDollarSign, FiEdit, FiEye, FiGift, FiLoader, FiMinusCircle, FiPlusCircle, FiTrendingUp, FiTrash2, FiUser } from 'react-icons/fi';
 import { getStoredToken } from '../api/httpClient.js';
 import { listProjects } from '../api/projectsApi.js';
 import SimpleModal from '../components/SimpleModal.jsx';
@@ -46,27 +46,131 @@ function toIsoDateTimeOrUndefined(value) {
   return dt.toISOString();
 }
 
-function resolveUserLabel(entry) {
+function resolveUserLabel(entry, userNameById = null) {
   const userObj = entry?.user || entry?.employee || {};
   const first =
-    entry?.userName
+    entry?.userFirstName
+    || entry?.userName
     || userObj?.name
     || userObj?.firstName
     || entry?.name
     || '';
   const last =
-    entry?.userSurname
+    entry?.userLastName
+    || entry?.userSurname
     || userObj?.surname
     || userObj?.lastName
     || entry?.surname
     || '';
   const full = `${first} ${last}`.trim();
   if (full) return full;
-  return String(entry?.userEmail || userObj?.email || entry?.email || entry?.userId || '').trim();
+  const email = String(entry?.userEmail || userObj?.email || entry?.email || '').trim();
+  if (email) return email;
+  const userId = String(entry?.userId || userObj?.id || '').trim();
+  if (userId && userNameById instanceof Map && userNameById.has(userId)) {
+    return userNameById.get(userId);
+  }
+  return '-';
+}
+
+function toValidDateInput(value) {
+  if (!value && value !== 0) return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  if (typeof value === 'number') {
+    const ms = value > 1e12 ? value : value * 1000;
+    const date = new Date(ms);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+      const date = new Date(`${text}T00:00:00`);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+    const date = new Date(text);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value === 'object') {
+    const nested = value?.$date ?? value?.iso ?? value?.value ?? value?.timestamp ?? null;
+    if (nested !== null) return toValidDateInput(nested);
+  }
+  return null;
+}
+
+function objectIdToIsoDate(value) {
+  const text = String(value || '').trim();
+  if (!/^[a-fA-F0-9]{24}$/.test(text)) return null;
+  const timestampHex = text.slice(0, 8);
+  const seconds = Number.parseInt(timestampHex, 16);
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  const date = new Date(seconds * 1000);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function entryPrimaryDate(entry) {
+  const source = entry || {};
+  const candidates = [
+    source.clockInAt,
+    source.clockOutAt,
+    source.effectiveAt,
+    source.createdAt,
+    source.appliedAt,
+    source.adjustmentAt,
+    source.date,
+    source.workDate,
+    source.entryDate,
+    source.day,
+    source.dayKey,
+    source.localDateKey,
+    source.bonusAt,
+    source.penaltyAt,
+    source.targetDate
+  ];
+
+  for (const candidate of candidates) {
+    const parsed = toValidDateInput(candidate);
+    if (parsed) return parsed.toISOString();
+  }
+
+  const fromObjectId = objectIdToIsoDate(source.id) || objectIdToIsoDate(source._id);
+  if (fromObjectId) return fromObjectId;
+  return null;
+}
+
+function normalizeSyntheticAdjustmentItem(item) {
+  const source = item || {};
+  const explicitType = String(source?.type || '').trim().toLowerCase();
+  const amount = toNumber(source?.amount ?? source?.absoluteAmount, 0);
+  const bonusAmount = source?.bonusAmount !== undefined && source?.bonusAmount !== null
+    ? toNumber(source.bonusAmount, 0)
+    : (explicitType === 'bonus' ? Math.max(0, amount) : 0);
+  const penaltyAmount = source?.penaltyAmount !== undefined && source?.penaltyAmount !== null
+    ? toNumber(source.penaltyAmount, 0)
+    : (explicitType === 'penalty' ? Math.max(0, amount) : 0);
+  const netAdjustment = source?.netAdjustment !== undefined && source?.netAdjustment !== null
+    ? toNumber(source.netAdjustment, 0)
+    : (bonusAmount - penaltyAmount);
+
+  const normalizedType = explicitType === 'bonus' || explicitType === 'penalty'
+    ? explicitType
+    : (netAdjustment < 0 ? 'penalty' : 'bonus');
+
+  return {
+    ...source,
+    type: normalizedType,
+    bonusAmount,
+    penaltyAmount,
+    netAdjustment,
+    effectiveAt: source?.effectiveAt || source?.appliedAt || source?.createdAt || source?.localDateKey || source?.dayKey || '',
+    description: source?.description || source?.notes || source?.reason || '',
+    userName: source?.userName || source?.user?.name || '',
+    userSurname: source?.userSurname || source?.user?.surname || ''
+  };
 }
 
 function entryDayKey(entry) {
-  const source = entry?.clockInAt || entry?.clockOutAt;
+  const source = entryPrimaryDate(entry);
   if (!source) return 'unknown';
   const dt = new Date(source);
   if (Number.isNaN(dt.getTime())) return 'unknown';
@@ -154,7 +258,15 @@ function toNumber(value, fallback = 0) {
 }
 
 function entryMinutes(row) {
-  return toNumber(row?.minutesWorked ?? row?.workedMinutes ?? row?.minutes, 0);
+  return toNumber(
+    row?.minutesWorked
+    ?? row?.workedMinutes
+    ?? row?.minutes
+    ?? row?.laborMinutes
+    ?? row?.totalMinutes
+    ?? row?.durationMinutes,
+    0
+  );
 }
 
 function entryRawMinutes(row) {
@@ -175,7 +287,63 @@ function formatMinutesHm(value) {
 }
 
 function entryEarned(row) {
-  return toNumber(row?.earnedAmount ?? row?.earned ?? row?.amount, 0);
+  return toNumber(
+    row?.earnedAmount
+    ?? row?.earned
+    ?? row?.amount
+    ?? row?.laborEarned
+    ?? row?.laborEarnings
+    ?? row?.earnedWithoutAdjustment
+    ?? row?.baseEarned,
+    0
+  );
+}
+
+function entryBonusAmount(row) {
+  return toNumber(row?.bonusAmount, 0);
+}
+
+function entryPenaltyAmount(row) {
+  return toNumber(row?.penaltyAmount, 0);
+}
+
+function entryNetAdjustment(row) {
+  if (row?.netAdjustment !== undefined && row?.netAdjustment !== null) {
+    return toNumber(row?.netAdjustment, 0);
+  }
+  return entryBonusAmount(row) - entryPenaltyAmount(row);
+}
+
+function entryEarnedWithAdjustment(row) {
+  if (row?.earnedWithAdjustment !== undefined && row?.earnedWithAdjustment !== null) {
+    return toNumber(row?.earnedWithAdjustment, 0);
+  }
+  return entryEarned(row) + entryNetAdjustment(row);
+}
+
+function entryAdjustmentType(row) {
+  const explicit = String(row?.type || '').trim().toLowerCase();
+  if (explicit === 'bonus' || explicit === 'penalty') return explicit;
+  const net = entryNetAdjustment(row);
+  return net < 0 ? 'penalty' : 'bonus';
+}
+
+function entryAdjustmentReason(row) {
+  const candidates = [
+    row?.description,
+    row?.notes,
+    row?.reason,
+    row?.adjustmentDescription,
+    row?.bonusDescription,
+    row?.penaltyDescription,
+    row?.bonus?.description,
+    row?.penalty?.description
+  ];
+  for (const value of candidates) {
+    const text = String(value || '').trim();
+    if (text) return text;
+  }
+  return '-';
 }
 
 function isEditedEntry(entry) {
@@ -191,20 +359,49 @@ function isActiveProject(project) {
 }
 
 function resolveSummary(payload, items = []) {
-  const source =
-    payload?.summary
-    || payload?.data?.summary
-    || payload?.totals
-    || payload?.data?.totals
+  const summaryCandidates = [
+    payload?.summary,
+    payload?.data?.summary,
+    payload?.totals,
+    payload?.data?.totals,
+    payload?.data,
+    payload
+  ].filter((candidate) => candidate && typeof candidate === 'object');
+
+  const scoreSummaryCandidate = (candidate) => {
+    const has = (value) => value !== undefined && value !== null && value !== '';
+    const totalHours = candidate?.totalHours;
+    const totalLaborEarned = candidate?.totalLaborEarned ?? candidate?.laborEarnings ?? candidate?.totalLaborEarnings;
+    const totalBonus = candidate?.totalBonus ?? candidate?.bonusTotal;
+    const totalPenalty = candidate?.totalPenalty ?? candidate?.penaltyTotal;
+    const bonusPenaltyNet = candidate?.bonusPenaltyNet ?? candidate?.bonusPenaltyTotal;
+    const totalEarned = candidate?.totalEarned ?? candidate?.earnedTotal;
+    let score = 0;
+    if (has(totalHours)) score += 2;
+    if (has(totalLaborEarned)) score += 3;
+    if (has(totalBonus)) score += 2;
+    if (has(totalPenalty)) score += 2;
+    if (has(bonusPenaltyNet)) score += 2;
+    if (has(totalEarned)) score += 3;
+    return score;
+  };
+
+  const source = summaryCandidates
+    .slice()
+    .sort((a, b) => scoreSummaryCandidate(b) - scoreSummaryCandidate(a))[0]
     || null;
 
   const fallbackMinutes = items.reduce((sum, row) => sum + entryMinutes(row), 0);
   const fallbackEarned = items.reduce((sum, row) => sum + entryEarned(row), 0);
   const fallbackEntries = items.length;
-  const sourceMinutes = toNumber(source?.totalMinutes, 0);
-  const sourceHours = toNumber(source?.totalHours, 0);
-  const sourceEarned = toNumber(source?.totalEarned, 0);
-  const sourceEntries = toNumber(source?.totalEntries, 0);
+  const sourceMinutes = toNumber(source?.totalMinutes ?? source?.laborMinutes ?? source?.totalLaborMinutes, 0);
+  const sourceHours = toNumber(source?.totalHours ?? source?.laborHours, sourceMinutes / 60);
+  const sourceLaborEarned = toNumber(source?.totalLaborEarned ?? source?.laborEarnings ?? source?.totalLaborEarnings, 0);
+  const sourceBonus = toNumber(source?.totalBonus ?? source?.bonusTotal, 0);
+  const sourcePenalty = toNumber(source?.totalPenalty ?? source?.penaltyTotal, 0);
+  const sourceBonusPenaltyNet = toNumber(source?.bonusPenaltyNet ?? source?.bonusPenaltyTotal, sourceBonus - sourcePenalty);
+  const sourceEarned = toNumber(source?.totalEarned ?? source?.earnedTotal, sourceLaborEarned + sourceBonusPenaltyNet);
+  const sourceEntries = toNumber(source?.totalEntries ?? source?.entriesCount, 0);
 
   const sourceLooksEmpty = source && sourceMinutes === 0 && sourceHours === 0 && sourceEarned === 0 && sourceEntries === 0;
   const fallbackHasData = fallbackMinutes > 0 || fallbackEarned > 0 || fallbackEntries > 0;
@@ -213,15 +410,43 @@ function resolveSummary(payload, items = []) {
       totalEntries: fallbackEntries,
       totalMinutes: fallbackMinutes,
       totalHours: fallbackMinutes / 60,
-      totalEarned: fallbackEarned
+      totalEarned: fallbackEarned,
+      totalLaborEarned: fallbackEarned,
+      totalBonus: 0,
+      totalPenalty: 0,
+      bonusPenaltyNet: 0
     };
   }
 
+  // Items are paginated display rows; use them only as legacy fallback when summary is absent/empty.
+  const fallbackBonus = items.reduce((sum, row) => sum + entryBonusAmount(row), 0);
+  const fallbackPenalty = items.reduce((sum, row) => sum + entryPenaltyAmount(row), 0);
+  const fallbackNetAdjustment = items.reduce((sum, row) => sum + entryNetAdjustment(row), 0);
+  const hasBackendSummary = Boolean(source && Object.keys(source).length);
+  const resolvedTotalMinutes = hasBackendSummary ? sourceMinutes : fallbackMinutes;
+  const resolvedTotalHours = hasBackendSummary ? sourceHours : (fallbackMinutes / 60);
+  const resolvedLaborEarned = hasBackendSummary
+    ? (sourceLaborEarned !== 0 ? sourceLaborEarned : sourceEarned)
+    : fallbackEarned;
+  const resolvedBonus = hasBackendSummary ? sourceBonus : fallbackBonus;
+  const resolvedPenalty = hasBackendSummary ? sourcePenalty : fallbackPenalty;
+  const resolvedNetAdjustment = hasBackendSummary
+    ? sourceBonusPenaltyNet
+    : fallbackNetAdjustment;
+  const resolvedTotalEarned = hasBackendSummary
+    ? sourceEarned
+    : (fallbackEarned + fallbackNetAdjustment);
+  const resolvedEntries = hasBackendSummary ? sourceEntries : fallbackEntries;
+
   return {
-    totalEntries: toNumber(source?.totalEntries, fallbackEntries),
-    totalMinutes: toNumber(source?.totalMinutes, fallbackMinutes),
-    totalHours: toNumber(source?.totalHours, fallbackMinutes / 60),
-    totalEarned: toNumber(source?.totalEarned, fallbackEarned)
+    totalEntries: resolvedEntries,
+    totalMinutes: resolvedTotalMinutes,
+    totalHours: resolvedTotalHours,
+    totalEarned: resolvedTotalEarned,
+    totalLaborEarned: resolvedLaborEarned,
+    totalBonus: resolvedBonus,
+    totalPenalty: resolvedPenalty,
+    bonusPenaltyNet: resolvedNetAdjustment
   };
 }
 
@@ -231,7 +456,17 @@ export default function Hours() {
 
   const [items, setItems] = useState([]);
   const [expandedDays, setExpandedDays] = useState({});
-  const [summary, setSummary] = useState({ totalHours: 0, totalEarned: 0, totalEntries: 0, totalMinutes: 0 });
+  const [summary, setSummary] = useState({
+    totalHours: 0,
+    totalEarned: 0,
+    totalEntries: 0,
+    totalMinutes: 0,
+    totalLaborEarned: 0,
+    totalBonus: 0,
+    totalPenalty: 0,
+    bonusPenaltyNet: 0
+  });
+  const [syntheticAdjustmentItems, setSyntheticAdjustmentItems] = useState([]);
   const [rangeInfo, setRangeInfo] = useState({ label: '-' });
   const [cursor, setCursor] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -282,11 +517,19 @@ export default function Hours() {
   const isActive = activeTab === 'hours';
   const presetLabels = useMemo(() => presetDisplayLabels(), []);
   const groupedItems = useMemo(() => {
+    const hoursItems = Array.isArray(items) ? items : [];
+    const adjustmentItems = (Array.isArray(syntheticAdjustmentItems) ? syntheticAdjustmentItems : []).map((item) => ({
+      ...item,
+      __syntheticAdjustment: true
+    }));
+    const combinedItems = [...hoursItems, ...adjustmentItems];
     const map = new Map();
-    for (const entry of items) {
+    for (const entry of combinedItems) {
       const key = entryDayKey(entry);
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(entry);
+      if (!map.has(key)) map.set(key, { hoursItems: [], adjustmentItems: [] });
+      const bucket = map.get(key);
+      if (entry?.__syntheticAdjustment) bucket.adjustmentItems.push(entry);
+      else bucket.hoursItems.push(entry);
     }
     return Array.from(map.entries())
       .sort((a, b) => {
@@ -294,16 +537,39 @@ export default function Hours() {
         if (b[0] === 'unknown') return -1;
         return a[0] < b[0] ? 1 : -1;
       })
-      .map(([dayKey, dayItems]) => ({
+      .map(([dayKey, dayGroup]) => {
+        const sortedHoursItems = dayGroup.hoursItems.sort((a, b) => {
+          const aTime = new Date(entryPrimaryDate(a) || 0).getTime();
+          const bTime = new Date(entryPrimaryDate(b) || 0).getTime();
+          return bTime - aTime;
+        });
+        const sortedAdjustmentItems = dayGroup.adjustmentItems.sort((a, b) => {
+          const aTime = new Date(entryPrimaryDate(a) || 0).getTime();
+          const bTime = new Date(entryPrimaryDate(b) || 0).getTime();
+          return bTime - aTime;
+        });
+        return {
         dayKey,
         dayLabel: formatDayLabel(dayKey),
-        count: dayItems.length,
-        totalMinutes: dayItems.reduce((sum, item) => sum + entryMinutes(item), 0),
-        items: dayItems
-      }));
-  }, [items]);
+        count: sortedHoursItems.length,
+        totalMinutes: sortedHoursItems.reduce((sum, item) => sum + entryMinutes(item), 0),
+        hoursItems: sortedHoursItems,
+        adjustmentItems: sortedAdjustmentItems
+      };
+      });
+  }, [items, syntheticAdjustmentItems]);
   const selectedManualUser = userOptions.find((user) => String(user?.id || '') === String(manualForm.userId || ''));
   const selectedManualProject = projectOptions.find((project) => String(project?.id || '') === String(manualForm.projectId || ''));
+  const userNameById = useMemo(() => {
+    const map = new Map();
+    for (const user of userOptions) {
+      const id = String(user?.id || '').trim();
+      if (!id) continue;
+      const label = `${user?.name || ''} ${user?.surname || ''}`.trim() || String(user?.email || '').trim();
+      if (label) map.set(id, label);
+    }
+    return map;
+  }, [userOptions]);
   const manualUserSearchText = String(manualUserSearch || '').trim().toLowerCase();
   const manualProjectSearchText = String(manualProjectSearch || '').trim().toLowerCase();
   const manualFilteredUsers = userOptions.filter((user) => {
@@ -386,7 +652,12 @@ export default function Hours() {
 
       const data = await hoursReport(query);
       const nextItems = Array.isArray(data?.items) ? data.items : [];
+      const rawSyntheticItems = Array.isArray(data?.syntheticAdjustmentItems)
+        ? data.syntheticAdjustmentItems
+        : (Array.isArray(data?.data?.syntheticAdjustmentItems) ? data.data.syntheticAdjustmentItems : []);
+      const nextSyntheticItems = rawSyntheticItems.map(normalizeSyntheticAdjustmentItem);
       setItems((prev) => (reset ? nextItems : [...prev, ...nextItems]));
+      setSyntheticAdjustmentItems((prev) => (reset ? nextSyntheticItems : [...prev, ...nextSyntheticItems]));
       setCursor(data?.nextCursor || null);
       const nextSummary = resolveSummary(data, nextItems);
       if (reset) setSummary(nextSummary);
@@ -642,14 +913,54 @@ export default function Hours() {
           </div>
         ) : null}
 
-        <div className="home-personal-grid">
-          <div className="metric">
-            <span className="metric-label">Total Hours</span>
-            <span className="metric-value">{Number(summary?.totalHours || 0).toFixed(2)}</span>
+        <div className="hours-summary-grid">
+          <div className="hours-summary-card hours-summary-card-hero">
+            <div className="hours-summary-card-head">
+              <span className="hours-summary-icon" aria-hidden="true"><FiDollarSign /></span>
+              <span className="hours-summary-label">Total Earned</span>
+            </div>
+            <div className="hours-summary-value">${Number(summary?.totalEarned || 0).toFixed(2)}</div>
           </div>
-          <div className="metric">
-            <span className="metric-label">Total Earned</span>
-            <span className="metric-value">${Number(summary?.totalEarned || 0).toFixed(2)}</span>
+
+          <div className="hours-summary-card hours-summary-card-labor">
+            <div className="hours-summary-mini-row">
+              <div className="hours-summary-mini-head">
+                <span className="hours-summary-icon muted" aria-hidden="true"><FiClock /></span>
+                <span>Total Hours</span>
+              </div>
+              <strong>{Number(summary?.totalHours || 0).toFixed(2)}</strong>
+            </div>
+            <div className="hours-summary-mini-row">
+              <div className="hours-summary-mini-head">
+                <span className="hours-summary-icon labor" aria-hidden="true"><FiTrendingUp /></span>
+                <span>Labor Earned</span>
+              </div>
+              <strong>${Number(summary?.totalLaborEarned || 0).toFixed(2)}</strong>
+            </div>
+          </div>
+
+          <div className="hours-summary-card hours-summary-card-adjustments">
+            <div className="hours-summary-mini-row">
+              <div className="hours-summary-mini-head">
+                <span className="hours-summary-icon bonus" aria-hidden="true"><FiGift /></span>
+                <span>Bonus</span>
+              </div>
+              <strong className="is-bonus">${Number(summary?.totalBonus || 0).toFixed(2)}</strong>
+            </div>
+            <div className="hours-summary-mini-row">
+              <div className="hours-summary-mini-head">
+                <span className="hours-summary-icon penalty" aria-hidden="true"><FiMinusCircle /></span>
+                <span>Penalty</span>
+              </div>
+              <strong className="is-penalty">${Number(summary?.totalPenalty || 0).toFixed(2)}</strong>
+            </div>
+            <div className="hours-summary-mini-row">
+              <div className="hours-summary-mini-head">
+                <span className="hours-summary-icon net" aria-hidden="true"><FiTrendingUp /></span>
+                <span>Net Adjustment</span>
+              </div>
+              <strong className="is-net">${Number(summary?.bonusPenaltyNet || 0).toFixed(2)}</strong>
+            </div>
           </div>
         </div>
       </div>
@@ -682,8 +993,8 @@ export default function Hours() {
                 </span>
               </button>
               <div className="day-body">
-                {group.items.map((entry) => {
-                  const userLabel = resolveUserLabel(entry) || '-';
+                {group.hoursItems.map((entry) => {
+                  const userLabel = resolveUserLabel(entry, userNameById) || '-';
                   const projectLabel = resolveProjectLabel(entry);
                   const edited = isEditedEntry(entry);
                   const editedTooltip = 'Edited';
@@ -759,12 +1070,51 @@ export default function Hours() {
                   </div>
                   );
                 })}
+                {group.adjustmentItems.map((entry) => {
+                  const userLabel = resolveUserLabel(entry, userNameById) || '-';
+                  const projectLabel = resolveProjectLabel(entry);
+                  const adjustmentType = entryAdjustmentType(entry);
+                  return (
+                    <div key={`synthetic-${entry.id || `${group.dayKey}-${userLabel}`}`} className="hours-card time-card hours-card-compact">
+                      <div className="hours-card-head">
+                        <div className="hours-emp-wrap">
+                          <FiClock />
+                          <div className="hours-title-wrap">
+                            <strong className="hours-emp">{userLabel || 'Adjustment'}</strong>
+                            <div className="hours-user-line">{truncateText(projectLabel, 48)}</div>
+                          </div>
+                        </div>
+                        <span className={`hours-adjustment-badge ${adjustmentType}`}>
+                          {adjustmentType === 'penalty' ? 'Penalty' : 'Bonus'}
+                        </span>
+                      </div>
+                      <div className="hours-entry-grid">
+                        <div className="hours-entry-row two">
+                          <div className="hours-chip">
+                            <span>Bonus | Penalty</span>
+                            <strong>{`+$${entryBonusAmount(entry).toFixed(2)} | -$${entryPenaltyAmount(entry).toFixed(2)}`}</strong>
+                          </div>
+                          <div className="hours-chip">
+                            <span>Net Adjustment</span>
+                            <strong>{`${entryNetAdjustment(entry) >= 0 ? '+' : ''}$${entryNetAdjustment(entry).toFixed(2)}`}</strong>
+                          </div>
+                        </div>
+                        <div className="hours-entry-row one">
+                          <div className="hours-chip">
+                            <span>Reason</span>
+                            <strong>{entryAdjustmentReason(entry)}</strong>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )})}
         </div>
 
-        {!items.length && !loading ? <div className="muted">No hours found for selected filters.</div> : null}
+        {!items.length && !syntheticAdjustmentItems.length && !loading ? <div className="muted">No hours found for selected filters.</div> : null}
         {loading && !items.length ? (
           <div className="section card" style={{ textAlign: 'center' }}>
             <FiLoader className="btn-spinner" style={{ width: 24, height: 24, marginBottom: 8 }} />
@@ -900,6 +1250,18 @@ export default function Hours() {
           <div className="hours-chip">
             <span>Worked Time</span>
             <strong style={{ color: 'var(--accent)' }}>{formatMinutesHm(entryMinutes(viewEntry))}</strong>
+          </div>
+          <div className="hours-chip">
+            <span>Bonus | Penalty</span>
+            <strong>{`+$${entryBonusAmount(viewEntry).toFixed(2)} | -$${entryPenaltyAmount(viewEntry).toFixed(2)}`}</strong>
+          </div>
+          <div className="hours-chip">
+            <span>Net Adjustment</span>
+            <strong>{`${entryNetAdjustment(viewEntry) >= 0 ? '+' : ''}$${entryNetAdjustment(viewEntry).toFixed(2)}`}</strong>
+          </div>
+          <div className="hours-chip">
+            <span>Adjusted Earned</span>
+            <strong>{`$${entryEarnedWithAdjustment(viewEntry).toFixed(2)}`}</strong>
           </div>
           <div className="hours-chip">
             <span>Clock In</span>

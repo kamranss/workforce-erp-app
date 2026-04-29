@@ -1,6 +1,6 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FiCheckCircle, FiChevronDown, FiClock, FiEdit2, FiLoader, FiMessageCircle, FiNavigation, FiPhone, FiPlusCircle, FiSlash, FiTrendingUp } from 'react-icons/fi';
+import { FiCheckCircle, FiChevronDown, FiClock, FiEdit2, FiLoader, FiMessageCircle, FiNavigation, FiPhone, FiPlusCircle, FiSlash, FiTrendingUp, FiUserPlus } from 'react-icons/fi';
 import { createCustomer, listCustomers, searchCustomersForProjectPicker, updateCustomer } from '../api/customersApi.js';
 import { createProject, listProjects, projectStatusCounts, updateProject } from '../api/projectsApi.js';
 import { projectSummary } from '../api/reportsApi.js';
@@ -244,7 +244,8 @@ function normalizeProjectSummary(raw) {
       root,
       ['projectMaterialExpenseNetAfterCustomerPayments'],
       pickNumber(summary, ['projectMaterialExpenseNetAfterCustomerPayments'], 0)
-    )
+    ),
+    workersCount: pickNumber(root, ['workersCount'], pickNumber(summary, ['workersCount'], 0))
   };
 }
 
@@ -1303,11 +1304,11 @@ export default function Projects() {
             </div>
           </div>
           <div className="full fin-project-summary-top">
-            <div className="fin-project-top-card">
+            <div className="fin-project-top-card status-card">
               <span className="home-metric-label">Status</span>
               <span className={`home-metric-value fin-status-badge ${projectStatusToneClass}`}>{selectedProjectSummary?.projectStatus || '-'}</span>
             </div>
-            <div className="fin-project-top-card">
+            <div className="fin-project-top-card agreed-card">
               <span className="home-metric-label">Agreed Amount</span>
               <span className="home-metric-value">{money(selectedProjectSummary?.projectQuoteAmount)}</span>
             </div>
@@ -1317,10 +1318,26 @@ export default function Projects() {
             </div>
           </div>
           <div className="full home-stat-grid fin-project-metrics">
-            <div className="home-metric"><span className="home-metric-label">Labor Hours Worked</span><span className="home-metric-value">{hoursFromMinutes(selectedProjectSummary?.laborMinutes)}</span></div>
-            <div className="home-metric"><span className="home-metric-label">Labor Earned</span><span className="home-metric-value">{money(selectedProjectSummary?.laborEarnings)}</span></div>
-            <div className="home-metric"><span className="home-metric-label">Project Material Expenses</span><span className="home-metric-value">{money(selectedProjectSummary?.projectExpenseTotal)}</span></div>
-            <div className="home-metric"><span className="home-metric-label">Company Expenses (Project-Related)</span><span className="home-metric-value">{money(selectedProjectSummary?.companyProjectRelatedExpenseTotal)}</span></div>
+            <div className="home-metric metric-workers">
+              <div className="prj-metric-head"><span className="prj-metric-icon workers"><FiUserPlus /></span><span className="home-metric-label">Workers Count</span></div>
+              <span className="home-metric-value">{Number(selectedProjectSummary?.workersCount || 0)}</span>
+            </div>
+            <div className="home-metric metric-hours">
+              <div className="prj-metric-head"><span className="prj-metric-icon hours"><FiClock /></span><span className="home-metric-label">Labor Hours Worked</span></div>
+              <span className="home-metric-value">{hoursFromMinutes(selectedProjectSummary?.laborMinutes)}</span>
+            </div>
+            <div className="home-metric metric-labor">
+              <div className="prj-metric-head"><span className="prj-metric-icon labor"><FiTrendingUp /></span><span className="home-metric-label">Labor Earned</span></div>
+              <span className="home-metric-value">{money(selectedProjectSummary?.laborEarnings)}</span>
+            </div>
+            <div className="home-metric metric-material">
+              <div className="prj-metric-head"><span className="prj-metric-icon material"><FiPlusCircle /></span><span className="home-metric-label">Project Material Expenses</span></div>
+              <span className="home-metric-value">{money(selectedProjectSummary?.projectExpenseTotal)}</span>
+            </div>
+            <div className="home-metric metric-company-expense">
+              <div className="prj-metric-head"><span className="prj-metric-icon company"><FiTrendingUp /></span><span className="home-metric-label">Company Expenses (Project-Related)</span></div>
+              <span className="home-metric-value">{money(selectedProjectSummary?.companyProjectRelatedExpenseTotal)}</span>
+            </div>
           </div>
         </div>
       </SimpleModal>

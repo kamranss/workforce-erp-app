@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { FiAlertTriangle, FiCheckCircle, FiChevronDown, FiDollarSign, FiLoader, FiNavigation, FiPlusCircle, FiTrendingUp, FiUserPlus, FiXCircle } from 'react-icons/fi';
+import { FiAlertTriangle, FiCheckCircle, FiChevronDown, FiClock, FiDollarSign, FiLoader, FiNavigation, FiPlusCircle, FiTrendingUp, FiUserPlus, FiXCircle } from 'react-icons/fi';
 import { createBonus, deleteBonus, listBonuses, updateBonus } from '../api/bonusAndPenaltiesApi.js';
 import { createCustomerPayment, deleteCustomerPayment, listCustomerPayments, updateCustomerPayment } from '../api/customerPaymentsApi.js';
 import { createExpense, deleteExpense, listExpenses, updateExpense } from '../api/expensesApi.js';
+import { normalizeBonusPenalty, normalizeBonusPenaltyList, normalizeTotals } from '../api/financeNormalizers.js';
 import { createPayment, deletePayment, listPayments, updatePayment } from '../api/paymentsApi.js';
 import { listProjects, searchProjectsForExpenses } from '../api/projectsApi.js';
 import { companyExpensesOverview, customerPaymentsOverview, projectSummary, projectsFinanceOverview, userLiability } from '../api/reportsApi.js';
@@ -29,6 +30,10 @@ const DATE_PRESETS = [
   { value: 'thisMonth', label: 'This Month' },
   { value: 'previousMonth', label: 'Previous Month' },
   { value: 'custom', label: 'Custom' }
+];
+const BONUS_TYPE_OPTIONS = [
+  { value: 'bonus', label: 'Bonus' },
+  { value: 'penalty', label: 'Penalty' }
 ];
 
 const EXPENSE_TYPE_OPTIONS = [
@@ -731,18 +736,24 @@ function normalizeProjectSummary(raw) {
 function normalizeUserFinancialSummary(raw) {
   const source = raw?.summary || raw?.totals || raw?.data?.summary || raw?.data?.totals || raw?.data || raw || {};
   const laborMinutes = Number(source?.laborMinutes || 0);
-  const laborEarnings = Number(source?.laborEarnings || 0);
-  const paymentsTotal = Number(source?.paymentsTotal || 0);
-  const pendingTotal = Number(source?.pendingTotal || 0);
-  const bonusPenaltyTotal = Number(source?.bonusPenaltyTotal || 0);
+  const laborEarnings = Number(source?.laborEarnings ?? source?.totalLaborEarned ?? source?.totalEarned ?? 0);
+  const paymentsTotal = Number(source?.paymentsTotal ?? source?.paidTotal ?? 0);
+  const pendingTotal = Number(source?.pendingTotal ?? source?.pendingAmount ?? 0);
+  const bonusTotals = normalizeTotals(source);
   return {
     laborMinutes,
     totalHours: laborMinutes / 60,
     totalEarned: laborEarnings,
     paidTotal: paymentsTotal,
     pendingTotal,
-    bonusPenaltyTotal
+    bonusTotal: bonusTotals.bonusTotal,
+    penaltyTotal: bonusTotals.penaltyTotal,
+    bonusPenaltyTotal: bonusTotals.bonusPenaltyTotal
   };
+}
+
+function bonusTypeLabel(value) {
+  return String(value || '').toLowerCase() === 'penalty' ? 'Penalty' : 'Bonus';
 }
 
 function formatUserPaymentRateLabel(user) {
@@ -786,6 +797,47 @@ function createDefaultCompanyExpensesFilter() {
     year: new Date().getFullYear(),
     month: '',
     quarter: ''
+  };
+}
+
+function createDefaultBonusForm(userId = '') {
+  return {
+    userId,
+    type: '',
+    amount: '',
+    description: '',
+    effectiveAt: toInputDateTime(new Date().toISOString())
+  };
+}
+
+function createDefaultPaymentForm(userId = '') {
+  return {
+    userId,
+    amount: '',
+    method: 'cash',
+    notes: '',
+    paidAt: toInputDateTime(new Date().toISOString())
+  };
+}
+
+function createDefaultExpenseForm() {
+  return {
+    scope: 'project',
+    projectId: '',
+    type: 'material',
+    amount: '',
+    notes: '',
+    spentAt: toInputDateTime(new Date().toISOString())
+  };
+}
+
+function createDefaultCustomerPaymentForm(projectId = '') {
+  return {
+    projectId,
+    amount: '',
+    type: 'main_work',
+    paidAt: toInputDateTime(new Date().toISOString()),
+    notes: ''
   };
 }
 
@@ -856,7 +908,7 @@ export default function Finance() {
   const [expenses, setExpenses] = useState([]);
   const [bonuses, setBonuses] = useState([]);
   const [userForm, setUserForm] = useState(EMPTY_USER);
-  const [paymentForm, setPaymentForm] = useState({ userId: '', amount: '', method: 'cash', notes: '', paidAt: '' });
+  const [paymentForm, setPaymentForm] = useState(() => createDefaultPaymentForm(''));
   const [paymentUserPickerOpen, setPaymentUserPickerOpen] = useState(false);
   const [paymentUserSearch, setPaymentUserSearch] = useState('');
   const [paymentEditId, setPaymentEditId] = useState('');
@@ -865,7 +917,7 @@ export default function Finance() {
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [paymentLoadMoreBusy, setPaymentLoadMoreBusy] = useState(false);
   const [paymentFilter, setPaymentFilter] = useState({ userId: '', method: '', from: '', to: '' });
-  const [customerPaymentForm, setCustomerPaymentForm] = useState({ projectId: '', amount: '', type: 'main_work', paidAt: '', notes: '' });
+  const [customerPaymentForm, setCustomerPaymentForm] = useState(() => createDefaultCustomerPaymentForm(''));
   const [customerPaymentProjectPickerOpen, setCustomerPaymentProjectPickerOpen] = useState(false);
   const [customerPaymentEditId, setCustomerPaymentEditId] = useState('');
   const [customerPaymentEditBusyId, setCustomerPaymentEditBusyId] = useState('');
@@ -873,7 +925,7 @@ export default function Finance() {
   const [customerPaymentLoading, setCustomerPaymentLoading] = useState(false);
   const [customerPaymentLoadMoreBusy, setCustomerPaymentLoadMoreBusy] = useState(false);
   const [customerPaymentFilter, setCustomerPaymentFilter] = useState({ projectId: '', type: '', from: '', to: '' });
-  const [expenseForm, setExpenseForm] = useState({ scope: 'project', projectId: '', type: 'material', amount: '', notes: '', spentAt: '' });
+  const [expenseForm, setExpenseForm] = useState(() => createDefaultExpenseForm());
   const [expenseEditId, setExpenseEditId] = useState('');
   const [expenseEditBusyId, setExpenseEditBusyId] = useState('');
   const [expenseCursor, setExpenseCursor] = useState(null);
@@ -887,7 +939,7 @@ export default function Finance() {
   const [expenseProjectCursor, setExpenseProjectCursor] = useState(null);
   const [expenseProjectHasMore, setExpenseProjectHasMore] = useState(false);
   const [expenseProjectLoadMoreBusy, setExpenseProjectLoadMoreBusy] = useState(false);
-  const [bonusForm, setBonusForm] = useState({ userId: '', amount: '', description: '', effectiveAt: '' });
+  const [bonusForm, setBonusForm] = useState(() => createDefaultBonusForm(''));
   const [bonusUserPickerOpen, setBonusUserPickerOpen] = useState(false);
   const [bonusUserSearch, setBonusUserSearch] = useState('');
   const [bonusEditId, setBonusEditId] = useState('');
@@ -1059,7 +1111,7 @@ export default function Finance() {
         from: range.from,
         to: range.to
       });
-      const nextBonuses = Array.isArray(b?.items) ? b.items : [];
+      const nextBonuses = normalizeBonusPenaltyList(b?.items);
       setBonuses((prev) => (reset ? nextBonuses : [...prev, ...nextBonuses]));
       setBonusCursor(b?.nextCursor || null);
       return nextBonuses;
@@ -1557,7 +1609,7 @@ export default function Finance() {
       } else {
         await createPayment(body);
       }
-      setPaymentForm({ userId: '', amount: '', method: 'cash', notes: '', paidAt: '' });
+      setPaymentForm(createDefaultPaymentForm(''));
       setPaymentEditId('');
       setPaymentModalOpen(false);
       await loadPaymentsData({ reset: true });
@@ -1614,7 +1666,7 @@ export default function Finance() {
       } else {
         await createCustomerPayment(body);
       }
-      setCustomerPaymentForm({ projectId: '', amount: '', type: 'main_work', paidAt: '', notes: '' });
+      setCustomerPaymentForm(createDefaultCustomerPaymentForm(''));
       setCustomerPaymentEditId('');
       setCustomerPaymentModalOpen(false);
       await loadCustomerPaymentsData({ reset: true });
@@ -1672,7 +1724,7 @@ export default function Finance() {
       } else {
         await createExpense(body);
       }
-      setExpenseForm({ scope: 'project', projectId: '', type: 'material', amount: '', notes: '', spentAt: '' });
+      setExpenseForm(createDefaultExpenseForm());
       setExpenseEditId('');
       setExpenseModalOpen(false);
       await loadExpensesData({ reset: true });
@@ -1735,9 +1787,23 @@ export default function Finance() {
   const saveBonus = async () => {
     setBonusSaving(true);
     try {
+      const amountValue = Number(bonusForm.amount || 0);
+      if (!bonusForm.userId) {
+        showToast('User is required.');
+        return;
+      }
+      if (!BONUS_TYPE_OPTIONS.some((option) => option.value === bonusForm.type)) {
+        showToast('Type is required.');
+        return;
+      }
+      if (!Number.isFinite(amountValue) || amountValue <= 0) {
+        showToast('Amount must be greater than 0.');
+        return;
+      }
       const body = {
         userId: bonusForm.userId,
-        amount: Number(bonusForm.amount || 0),
+        type: bonusForm.type,
+        amount: amountValue,
         description: bonusForm.description,
         effectiveAt: bonusForm.effectiveAt ? new Date(bonusForm.effectiveAt).toISOString() : undefined
       };
@@ -1746,7 +1812,7 @@ export default function Finance() {
       } else {
         await createBonus(body);
       }
-      setBonusForm({ userId: '', amount: '', description: '', effectiveAt: '' });
+      setBonusForm(createDefaultBonusForm(''));
       setBonusEditId('');
       setBonusModalOpen(false);
       await loadBonusesData({ reset: true });
@@ -1762,12 +1828,14 @@ export default function Finance() {
     if (!item?.id) return;
     setBonusEditBusyId(String(item.id));
     try {
+      const normalized = normalizeBonusPenalty(item);
       setBonusEditId(String(item.id));
       setBonusForm({
-        userId: item?.userId || '',
-        amount: item?.amount ?? '',
-        description: item?.description || '',
-        effectiveAt: toInputDateTime(item?.effectiveAt || item?.createdAt)
+        userId: normalized?.userId || '',
+        type: normalized?.type || 'bonus',
+        amount: normalized?.absoluteAmount ?? '',
+        description: normalized?.description || '',
+        effectiveAt: toInputDateTime(normalized?.effectiveAt || normalized?.createdAt)
       });
       setBonusUserPickerOpen(false);
       setBonusUserSearch('');
@@ -2547,15 +2615,15 @@ export default function Finance() {
               ))}
 
               <div className="home-stat-grid fin-report-overall-metrics fin-company-expenses-summary-grid" style={{ marginBottom: 12 }}>
-                <div className="home-metric tone-labor">
+                <div className="home-metric tone-labor fin-company-expenses-summary-card labor-card">
                   <span className="home-metric-label">Total Labor</span>
                   <span className="home-metric-value">{money(companyExpensesSummary.totalLaborCost)}</span>
                 </div>
-                <div className="home-metric tone-expense">
+                <div className="home-metric tone-expense fin-company-expenses-summary-card other-card">
                   <span className="home-metric-label">Total Other Expenses</span>
                   <span className="home-metric-value">{money(companyExpensesSummary.totalOtherCompanyExpenses)}</span>
                 </div>
-                <div className="home-metric tone-consumed">
+                <div className="home-metric tone-consumed fin-company-expenses-summary-card combined-card">
                   <span className="home-metric-label">Total Combined Cost</span>
                   <span className="home-metric-value">{money(companyExpensesSummary.totalCombinedCost)}</span>
                 </div>
@@ -2605,15 +2673,21 @@ export default function Finance() {
                       </div>
                       <div className="fin-report-overview-meta">
                         <div className="fin-project-summary-group">
-                          <div className="fin-project-summary-row">
-                            <span className="dot labor" />
-                            <span>Labor by worker</span>
-                            <strong>{money(companyExpensesSummary.totalLaborCost)}</strong>
-                          </div>
-                          <div className="fin-project-summary-row">
-                            <span className="dot agreed" />
-                            <span>Entries</span>
-                            <strong>{companyExpensesData.laborBreakdown.reduce((sum, item) => sum + Number(item.entriesCount || 0), 0)}</strong>
+                          <div className="fin-company-labor-highlights">
+                            <div className="fin-company-labor-highlight labor">
+                              <span className="row-icon labor" aria-hidden="true"><FiClock /></span>
+                              <span className="fin-company-labor-highlight-copy">
+                                <span>Labor by worker</span>
+                                <strong>{money(companyExpensesSummary.totalLaborCost)}</strong>
+                              </span>
+                            </div>
+                            <div className="fin-company-labor-highlight workers">
+                              <span className="row-icon workers" aria-hidden="true"><FiUserPlus /></span>
+                              <span className="fin-company-labor-highlight-copy">
+                                <span>Workers</span>
+                                <strong>{companyExpensesSummary.laborWorkersCount}</strong>
+                              </span>
+                            </div>
                           </div>
                         </div>
                         <div className="fin-project-summary-group fin-project-summary-group-extra">
@@ -2666,15 +2740,21 @@ export default function Finance() {
                       </div>
                       <div className="fin-report-overview-meta">
                         <div className="fin-project-summary-group">
-                          <div className="fin-project-summary-row">
-                            <span className="dot expense" />
-                            <span>Other company expenses by category</span>
-                            <strong>{money(companyExpensesSummary.totalOtherCompanyExpenses)}</strong>
-                          </div>
-                          <div className="fin-project-summary-row">
-                            <span className="dot company-owned" />
-                            <span>Expense items</span>
-                            <strong>{companyExpensesSummary.expenseItemsCount}</strong>
+                          <div className="fin-company-category-highlights">
+                            <div className="fin-company-category-highlight category">
+                              <span className="row-icon category" aria-hidden="true"><FiTrendingUp /></span>
+                              <span className="fin-company-category-highlight-copy">
+                                <span>Other company expenses by category</span>
+                                <strong>{money(companyExpensesSummary.totalOtherCompanyExpenses)}</strong>
+                              </span>
+                            </div>
+                            <div className="fin-company-category-highlight items">
+                              <span className="row-icon items" aria-hidden="true"><FiPlusCircle /></span>
+                              <span className="fin-company-category-highlight-copy">
+                                <span>Expense category</span>
+                                <strong>{companyExpensesSummary.expenseItemsCount}</strong>
+                              </span>
+                            </div>
                           </div>
                         </div>
                         <div className="fin-project-summary-group fin-project-summary-group-extra">
@@ -2863,7 +2943,7 @@ export default function Finance() {
                 setCustomerPaymentEditId('');
                 setCustomerPaymentProjectPickerOpen(false);
                 setExpenseProjectSearch('');
-                setCustomerPaymentForm({ projectId: '', amount: '', type: 'main_work', paidAt: '', notes: '' });
+                setCustomerPaymentForm(createDefaultCustomerPaymentForm(''));
                 setCustomerPaymentModalOpen(true);
               }}
             >
@@ -3020,7 +3100,7 @@ export default function Finance() {
                     setPaymentEditId('');
                     setPaymentUserPickerOpen(false);
                     setPaymentUserSearch('');
-                    setPaymentForm({ userId: users[0]?.id || '', amount: '', method: 'cash', notes: '', paidAt: '' });
+                    setPaymentForm(createDefaultPaymentForm(users[0]?.id || ''));
                     setPaymentModalOpen(true);
                   }}
                 >
@@ -3136,14 +3216,7 @@ export default function Finance() {
                     setExpenseEditId('');
                     setExpenseProjectPickerOpen(false);
                     setExpenseProjectSearch('');
-                    setExpenseForm({
-                      scope: 'project',
-                      projectId: '',
-                      type: 'material',
-                      amount: '',
-                      notes: '',
-                      spentAt: ''
-                    });
+                    setExpenseForm(createDefaultExpenseForm());
                     setExpenseModalOpen(true);
                   }}
                 >
@@ -3280,7 +3353,7 @@ export default function Finance() {
                     setBonusEditId('');
                     setBonusUserPickerOpen(false);
                     setBonusUserSearch('');
-                    setBonusForm({ userId: users[0]?.id || '', amount: '', description: '', effectiveAt: '' });
+                    setBonusForm(createDefaultBonusForm(users[0]?.id || ''));
                     setBonusModalOpen(true);
                   }}
                 >
@@ -3331,24 +3404,36 @@ export default function Finance() {
                 </div>
               ))}
               <div className="fin-tx-list">
-                {bonuses.map((item) => (
-                  <div key={item.id} className="fin-tx-item">
-                    <div className="fin-tx-main">
-                      <span className="fin-tx-label">{item?.user?.name ? `${item.user.name} ${item.user?.surname || ''}` : item.userId}</span>
-                      <span className="fin-tx-meta">{new Date(item.effectiveAt || item.createdAt).toLocaleString()} | {item.description || '-'}</span>
+                {bonuses.map((item, index) => {
+                  const normalized = normalizeBonusPenalty(item);
+                  const isPenalty = normalized.type === 'penalty';
+                  const signedAmount = isPenalty ? -normalized.absoluteAmount : normalized.absoluteAmount;
+                  return (
+                    <div key={normalized.id || `bonus-${index}`} className="fin-tx-item">
+                      <div className="fin-tx-main">
+                        <span className="fin-tx-label">
+                          {normalized?.user?.name ? `${normalized.user.name} ${normalized.user?.surname || ''}` : normalized.userId}
+                        </span>
+                        <span className="fin-tx-meta">
+                          {new Date(normalized.effectiveAt || normalized.createdAt).toLocaleString()} | {normalized.description || '-'}
+                        </span>
+                      </div>
+                      <span className="pill">{bonusTypeLabel(normalized.type)}</span>
+                      <span className={`fin-tx-amount ${isPenalty ? 'negative' : 'positive'}`}>
+                        {`${isPenalty ? '-' : '+'}$${Math.abs(signedAmount).toFixed(2)}`}
+                      </span>
+                      <button
+                        type="button"
+                        className="ghost btn-tone-info btn-with-spinner"
+                        onClick={() => startEditBonus(normalized)}
+                        disabled={bonusEditBusyId === String(normalized.id)}
+                      >
+                        {bonusEditBusyId === String(normalized.id) ? <FiLoader className="btn-spinner" /> : null}
+                        <span>{bonusEditBusyId === String(normalized.id) ? 'Loading...' : 'Edit'}</span>
+                      </button>
                     </div>
-                    <span className={`fin-tx-amount ${Number(item.amount) < 0 ? 'negative' : 'positive'}`}>${Number(item.amount).toFixed(2)}</span>
-                    <button
-                      type="button"
-                      className="ghost btn-tone-info btn-with-spinner"
-                      onClick={() => startEditBonus(item)}
-                      disabled={bonusEditBusyId === String(item.id)}
-                    >
-                      {bonusEditBusyId === String(item.id) ? <FiLoader className="btn-spinner" /> : null}
-                      <span>{bonusEditBusyId === String(item.id) ? 'Loading...' : 'Edit'}</span>
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
               {!bonusLoading && bonuses.length ? (
                 <div className="fin-list-footer">
@@ -3488,7 +3573,9 @@ export default function Finance() {
             <div className="home-metric"><span className="home-metric-label">Total Earned</span><span className="home-metric-value">{money(selectedUserSummaryData?.totalEarned)}</span></div>
             <div className="home-metric"><span className="home-metric-label">Total Paid</span><span className="home-metric-value">{money(selectedUserSummaryData?.paidTotal)}</span></div>
             <div className="home-metric"><span className="home-metric-label">Pending</span><span className="home-metric-value">{money(selectedUserSummaryData?.pendingTotal)}</span></div>
-            <div className="home-metric"><span className="home-metric-label">Bonus/Penalty</span><span className="home-metric-value">{money(selectedUserSummaryData?.bonusPenaltyTotal)}</span></div>
+            <div className="home-metric"><span className="home-metric-label">Bonus</span><span className="home-metric-value">{money(selectedUserSummaryData?.bonusTotal)}</span></div>
+            <div className="home-metric"><span className="home-metric-label">Penalty</span><span className="home-metric-value">{money(selectedUserSummaryData?.penaltyTotal)}</span></div>
+            <div className="home-metric"><span className="home-metric-label">Net Adjustment</span><span className="home-metric-value">{money(selectedUserSummaryData?.bonusPenaltyTotal)}</span></div>
           </div>
         </div>
       </SimpleModal>
@@ -3752,7 +3839,7 @@ export default function Finance() {
           setPaymentEditId('');
           setPaymentUserPickerOpen(false);
           setPaymentUserSearch('');
-          setPaymentForm({ userId: '', amount: '', method: 'cash', notes: '', paidAt: '' });
+          setPaymentForm(createDefaultPaymentForm(''));
         }}
         title={paymentEditId ? 'Edit Payment' : 'Add Payment'}
         size="sm"
@@ -3816,7 +3903,7 @@ export default function Finance() {
                   await onDeletePayment(paymentEditId);
                   setPaymentModalOpen(false);
                   setPaymentEditId('');
-                  setPaymentForm({ userId: '', amount: '', method: 'cash', notes: '', paidAt: '' });
+                  setPaymentForm(createDefaultPaymentForm(''));
                 }}
                 disabled={paymentDeleteBusyId === String(paymentEditId)}
               >
@@ -3845,7 +3932,7 @@ export default function Finance() {
           setExpenseProjectCursor(null);
           setExpenseProjectHasMore(false);
           setExpenseProjectOptions([]);
-          setExpenseForm({ scope: 'project', projectId: '', type: 'material', amount: '', notes: '', spentAt: '' });
+          setExpenseForm(createDefaultExpenseForm());
         }}
         title={expenseEditId ? 'Edit Expense' : 'Add Expense'}
         size="sm"
@@ -3983,7 +4070,7 @@ export default function Finance() {
                   await onDeleteExpense(expenseEditId, expenseForm.type);
                   setExpenseModalOpen(false);
                   setExpenseEditId('');
-                  setExpenseForm({ scope: 'project', projectId: '', type: 'material', amount: '', notes: '', spentAt: '' });
+                  setExpenseForm(createDefaultExpenseForm());
                 }}
                 disabled={expenseDeleteBusyId === String(expenseEditId)}
               >
@@ -4010,7 +4097,7 @@ export default function Finance() {
           setCustomerPaymentEditId('');
           setCustomerPaymentProjectPickerOpen(false);
           setExpenseProjectSearch('');
-          setCustomerPaymentForm({ projectId: '', amount: '', type: 'main_work', paidAt: '', notes: '' });
+          setCustomerPaymentForm(createDefaultCustomerPaymentForm(''));
         }}
         title={customerPaymentEditId ? 'Edit Customer Payment' : 'Add Customer Payment'}
         size="sm"
@@ -4134,7 +4221,7 @@ export default function Finance() {
           setBonusEditId('');
           setBonusUserPickerOpen(false);
           setBonusUserSearch('');
-          setBonusForm({ userId: '', amount: '', description: '', effectiveAt: '' });
+          setBonusForm(createDefaultBonusForm(''));
         }}
         title={bonusEditId ? 'Edit Bonus / Penalty' : 'Add Bonus / Penalty'}
         size="sm"
@@ -4181,7 +4268,20 @@ export default function Finance() {
               ) : null}
             </div>
           ) : null}
-          <input placeholder="amount (+/-)" value={bonusForm.amount} onChange={(e) => setBonusForm({ ...bonusForm, amount: e.target.value })} />
+          <select value={bonusForm.type} onChange={(e) => setBonusForm({ ...bonusForm, type: e.target.value })}>
+            <option value="">Select type</option>
+            {BONUS_TYPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder="Amount"
+            value={bonusForm.amount}
+            onChange={(e) => setBonusForm({ ...bonusForm, amount: e.target.value })}
+          />
           <input placeholder="description" value={bonusForm.description} onChange={(e) => setBonusForm({ ...bonusForm, description: e.target.value })} />
           <input type="datetime-local" placeholder="Effective at (date & time)" value={bonusForm.effectiveAt || ''} onChange={(e) => setBonusForm({ ...bonusForm, effectiveAt: e.target.value })} />
           {bonusEditId && canDelete ? (
@@ -4194,7 +4294,7 @@ export default function Finance() {
                   await onDeleteBonus(bonusEditId);
                   setBonusModalOpen(false);
                   setBonusEditId('');
-                  setBonusForm({ userId: '', amount: '', description: '', effectiveAt: '' });
+                  setBonusForm(createDefaultBonusForm(''));
                 }}
                 disabled={bonusDeleteBusyId === String(bonusEditId)}
               >
